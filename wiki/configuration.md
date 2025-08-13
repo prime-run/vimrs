@@ -45,3 +45,57 @@ Notes:
 - Extra fields in config are ignored by serde; `mode = "..."` in examples is currently unused.
 - If `device_name` is omitted, it must be provided via CLI (`--device-name`).
 - Use `evremap list-devices` to discover `device_name` and `phys` values.
+
+## Rustdoc-style snippets
+
+```rust
+// src/mapping.rs
+pub use evdev_rs::enums::{EV_KEY as KeyCode, EventCode, EventType};
+use std::collections::HashSet;
+use std::path::Path;
+
+#[derive(Debug, Clone)]
+pub struct MappingConfig {
+    pub device_name: Option<String>,
+    pub phys: Option<String>,
+    pub mappings: Vec<Mapping>,
+}
+
+impl MappingConfig {
+    pub fn from_file<P: AsRef<Path>>(path: P) -> anyhow::Result<Self>;
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum Mapping {
+    DualRole { input: KeyCode, hold: Vec<KeyCode>, tap: Vec<KeyCode> },
+    Remap { input: HashSet<KeyCode>, output: HashSet<KeyCode> },
+}
+```
+
+```rust
+// src/mapping.rs (parsing helpers)
+use serde::Deserialize;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum ConfigError {
+    #[error("Invalid key `{0}`.  Use `evremap list-keys` to see possible keys.")]
+    InvalidKey(String),
+    #[error("Impossible: parsed KEY_XXX but not into an EV_KEY")]
+    ImpossibleParseKey,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(try_from = "String")]
+struct KeyCodeWrapper { pub code: KeyCode }
+
+impl std::convert::TryFrom<String> for KeyCodeWrapper {
+    type Error = ConfigError;
+    fn try_from(s: String) -> Result<KeyCodeWrapper, Self::Error>;
+}
+
+#[derive(Debug, Deserialize)]
+struct DualRoleConfig { input: KeyCodeWrapper, hold: Vec<KeyCodeWrapper>, tap: Vec<KeyCodeWrapper> }
+
+#[derive(Debug, Deserialize)]
+struct RemapConfig { input: Vec<KeyCodeWrapper>, output: Vec<KeyCodeWrapper> }

@@ -65,3 +65,17 @@
 - Error handling: `anyhow::*` in application layer; typed error only for config parse (`ConfigError`).
 - Logging: `log` facade with `env_logger`.
 - Style: follow `rustfmt` config. Keep modules small and responsibilities narrowly defined.
+
+## Rustdoc-style snippet
+
+```rust
+// src/main.rs
+fn setup_logger() {
+    let mut builder = env_logger::Builder::new();
+    builder.filter_level(log::LevelFilter::Info);
+    let env = env_logger::Env::new()
+        .filter("EVREMAP_LOG")
+        .write_style("EVREMAP_LOG_STYLE");
+    builder.parse_env(env);
+    builder.init();
+}

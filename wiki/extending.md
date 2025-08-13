@@ -87,3 +87,80 @@ This guide outlines where and how to add features or evolve the design.
 
 - Use `log` macros consistently; `trace!` is used for event IN/OUT.
 - Consider adding span-based tracing behind a feature flag without breaking the current `env_logger` default.
+
+## Rustdoc-style snippets
+
+### Where to extend the model (`src/mapping.rs`)
+
+```rust
+// Add a new variant and config conversion
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum Mapping {
+    DualRole { input: KeyCode, hold: Vec<KeyCode>, tap: Vec<KeyCode> },
+    Remap    { input: HashSet<KeyCode>, output: HashSet<KeyCode> },
+    // NewVariant { /* fields */ }, // <-- add here
+}
+
+impl MappingConfig {
+    pub fn from_file<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+        // ...
+        for dual in config_file.dual_role { mappings.push(dual.into()); }
+        for remap in config_file.remap { mappings.push(remap.into()); }
+        // for new_item in config_file.new_variant { mappings.push(new_item.into()); }
+        Ok(Self { /* ... */ })
+    }
+}
+```
+
+### Where to extend behavior (`src/remapper.rs`)
+
+```rust
+impl crate::remapper::InputMapper {
+    /// Compute effective pressed keys (extend with new variant behavior)
+    fn compute_keys(&self) -> HashSet<KeyCode> {
+        let mut keys: HashSet<KeyCode> = self.input_state.keys().cloned().collect();
+
+        // First pass: DualRole
+        for map in &self.mappings {
+            if let Mapping::DualRole { input, hold, .. } = map {
+                if keys.contains(input) {
+                    keys.remove(input);
+                    for h in hold { keys.insert(*h); }
+                }
+            }
+            // if let Mapping::NewVariant { /* ... */ } = map { /* transform keys */ }
+        }
+
+        let mut keys_minus_remapped = keys.clone();
+        // Second pass: Remap
+        for map in &self.mappings {
+            if let Mapping::Remap { input, output } = map {
+                if input.is_subset(&keys_minus_remapped) {
+                    for i in input { keys.remove(i); if !is_modifier(i) { keys_minus_remapped.remove(i); } }
+                    for o in output { keys.insert(*o); if !is_modifier(o) { keys_minus_remapped.remove(o); } }
+                }
+            }
+            // else if let Mapping::NewVariant { /* ... */ } = map { /* apply */ }
+        }
+        keys
+    }
+}
+```
+
+```rust
+// Matching new variants when handling events (press/release/repeat)
+pub fn update_with_event(&mut self, event: &InputEvent, code: KeyCode) -> Result<()> {
+    match KeyEventType::from_value(event.value) {
+        KeyEventType::Press => {
+            self.input_state.insert(code, event.time);
+            match self.lookup_mapping(code) {
+                Some(_m) => { /* possibly match NewVariant */ self.compute_and_apply_keys(&event.time)?; }
+                None => { self.cancel_pending_tap(); self.compute_and_apply_keys(&event.time)?; }
+            }
+        }
+        KeyEventType::Repeat => { /* extend if NewVariant should repeat */ }
+        KeyEventType::Release => { /* extend if NewVariant needs special release */ }
+        _ => self.write_event_and_sync(event)?,
+    }
+    Ok(())
+}

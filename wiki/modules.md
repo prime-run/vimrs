@@ -53,3 +53,16 @@ This repo is intentionally small. Each module has a focused responsibility.
   - 200ms threshold via `timeval_diff()`. On quick release of a `DualRole` input and if it is the current `tapping` key, emit `tap` press+release.
 - __Repeat handling__: for `Repeat`, emits `hold` (DualRole) or `output` (Remap); otherwise pass-through.
 - __Helpers__: `KeyEventType`, `timeval_diff`, `is_modifier`, `modifiers_first/last`, `make_event`, `generate_sync_event`.
+
+### Rustdoc-style snippet
+
+```rust
+use anyhow::Result;
+use std::path::Path;
+
+pub struct InputMapper { /* fields omitted */ }
+
+impl InputMapper {
+    pub fn create_mapper<P: AsRef<Path>>(path: P, mappings: Vec<crate::mapping::Mapping>) -> Result<Self>;
+    pub fn run_mapper(&mut self) -> Result<()>;
+}

@@ -35,3 +35,35 @@ CLI is defined in `src/main.rs` using `clap` derive. Entry enum: `Opt`.
 
 - Requires exclusive grab of the input device; typically needs root or proper udev permissions/group membership.
 - Virtual output device is derived from the input device capabilities.
+
+## Rustdoc-style snippets
+
+### CLI enum and helpers (`src/main.rs`)
+
+```rust
+use anyhow::Result;
+use clap::Parser;
+use std::path::PathBuf;
+
+/// Remap libinput evdev keyboard inputs
+#[derive(Debug, Parser)]
+#[command(name = "evremap", about, author = "Wez Furlong")]
+enum Opt {
+    ListDevices,
+    ListKeys,
+    DebugEvents { #[arg(long)] device_name: String, #[arg(long)] phys: Option<String> },
+    Remap {
+        #[arg(name = "CONFIG-FILE")] config_file: PathBuf,
+        #[arg(short, long, default_value = "2")] delay: f64,
+        #[arg(long)] device_name: Option<String>,
+        #[arg(long)] phys: Option<String>,
+        #[arg(long)] wait_for_device: bool,
+    },
+}
+
+fn setup_logger();
+
+fn get_device(device_name: &str, phys: Option<&str>, wait_for_device: bool)
+    -> anyhow::Result<crate::deviceinfo::DeviceInfo>;
+
+fn debug_events(device: crate::deviceinfo::DeviceInfo) -> Result<()>;

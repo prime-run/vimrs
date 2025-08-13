@@ -121,10 +121,10 @@ impl InputMapper {
             match status {
                 evdev_rs::ReadStatus::Success => {
                     if let EventCode::EV_KEY(ref key) = event.event_code {
-                        log::trace!("IN {:?}", event);
+                        log::trace!("IN {event:?}");
                         self.update_with_event(&event, *key)?;
                     } else {
-                        log::trace!("PASSTHRU {:?}", event);
+                        log::trace!("PASSTHRU {event:?}");
                         self.output.write_event(&event)?;
                     }
                 },
@@ -145,22 +145,21 @@ impl InputMapper {
         // First phase is to apply any DualRole mappings as they are likely to
         // be used to produce modifiers when held.
         for map in &self.mappings {
-            if let Mapping::DualRole { input, hold, .. } = map {
-                if keys.contains(input) {
+            if let Mapping::DualRole { input, hold, .. } = map
+                && keys.contains(input) {
                     keys.remove(input);
                     for h in hold {
                         keys.insert(*h);
                     }
                 }
-            }
         }
 
         let mut keys_minus_remapped = keys.clone();
 
         // Second pass to apply Remap items
         for map in &self.mappings {
-            if let Mapping::Remap { input, output } = map {
-                if input.is_subset(&keys_minus_remapped) {
+            if let Mapping::Remap { input, output } = map
+                && input.is_subset(&keys_minus_remapped) {
                     for i in input {
                         keys.remove(i);
                         if !is_modifier(i) {
@@ -176,7 +175,6 @@ impl InputMapper {
                         }
                     }
                 }
-            }
         }
 
         keys
@@ -220,13 +218,12 @@ impl InputMapper {
 
     fn lookup_dual_role_mapping(&self, code: KeyCode) -> Option<Mapping> {
         for map in &self.mappings {
-            if let Mapping::DualRole { input, .. } = map {
-                if *input == code {
+            if let Mapping::DualRole { input, .. } = map
+                && *input == code {
                     // A DualRole mapping has the highest precedence
                     // so we've found our match
                     return Some(map.clone());
                 }
-            }
         }
         None
     }
@@ -295,14 +292,13 @@ impl InputMapper {
 
                 if let Some(Mapping::DualRole { tap, .. }) = self.lookup_dual_role_mapping(code) {
                     // If released quickly enough, becomes a tap press.
-                    if let Some(tapping) = self.tapping.take() {
-                        if tapping == code
+                    if let Some(tapping) = self.tapping.take()
+                        && tapping == code
                             && timeval_diff(&event.time, &pressed_at) <= Duration::from_millis(200)
                         {
                             self.emit_keys(&tap, &event.time, KeyEventType::Press)?;
                             self.emit_keys(&tap, &event.time, KeyEventType::Release)?;
                         }
-                    }
                 }
             },
 
@@ -371,7 +367,7 @@ impl InputMapper {
     }
 
     fn write_event(&mut self, event: &InputEvent) -> Result<()> {
-        log::trace!("OUT: {:?}", event);
+        log::trace!("OUT: {event:?}");
         self.output.write_event(event)?;
         if let EventCode::EV_KEY(ref key) = event.event_code {
             let event_type = KeyEventType::from_value(event.value);

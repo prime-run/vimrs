@@ -27,3 +27,59 @@ Runtime model:
 - Exclusive grab of the real device (`GrabMode::Grab`).
 - Event loop reads from the real device; non-key events are pass-through; key events are processed and emitted as synthetic events to the uinput device.
 - Output device stays in sync using SYN_REPORT after each burst of writes.
+
+## Rustdoc-style overview
+
+### Key types and APIs
+
+```rust
+// src/mapping.rs
+use std::collections::HashSet;
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum Mapping {
+    DualRole {
+        input: crate::mapping::KeyCode,
+        hold: Vec<crate::mapping::KeyCode>,
+        tap: Vec<crate::mapping::KeyCode>,
+    },
+    Remap {
+        input: HashSet<crate::mapping::KeyCode>,
+        output: HashSet<crate::mapping::KeyCode>,
+    },
+}
+```
+
+```rust
+// src/remapper.rs
+use anyhow::Result;
+use std::path::Path;
+
+/// Core remapper engine
+pub struct InputMapper { /* fields omitted */ }
+
+impl InputMapper {
+    /// Create a mapper bound to a real device path with configured mappings
+    pub fn create_mapper<P: AsRef<Path>>(path: P, mappings: Vec<crate::mapping::Mapping>) -> Result<Self>;
+
+    /// Blocking event loop that reads, transforms, and emits events
+    pub fn run_mapper(&mut self) -> Result<()>;
+}
+```
+
+### Example: wiring configuration and runtime
+
+```rust
+// src/main.rs (excerpt)
+use crate::mapping::MappingConfig;
+use crate::remapper::InputMapper;
+
+let mut mapping_config = MappingConfig::from_file(&config_file)?;
+let device_info = get_device(
+    mapping_config.device_name.as_deref().unwrap(),
+    mapping_config.phys.as_deref(),
+    wait_for_device,
+)?;
+
+let mut mapper = InputMapper::create_mapper(device_info.path, mapping_config.mappings)?;
+mapper.run_mapper()?;

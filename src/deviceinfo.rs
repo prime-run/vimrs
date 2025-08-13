@@ -48,9 +48,9 @@ impl DeviceInfo {
         }
 
         if devices_with_name.len() > 1 {
-            log::warn!("The following devices match name `{}`:", name);
+            log::warn!("The following devices match name `{name}`:");
             for dev in &devices_with_name {
-                log::warn!("{:?}", dev);
+                log::warn!("{dev:?}");
             }
             log::warn!(
                 "evremap will use the first entry. If you want to use one of the others, add the \
@@ -83,7 +83,7 @@ impl DeviceInfo {
 
             match DeviceInfo::with_path(path) {
                 Ok(item) => devices.push(item),
-                Err(err) => log::error!("{:#}", err),
+                Err(err) => log::error!("{err:#}"),
             }
         }
 

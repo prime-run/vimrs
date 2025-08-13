@@ -76,3 +76,46 @@ Notes:
 - `is_modifier` identifies standard modifiers. They get priority ordering:
   - Press: modifiers first.
   - Release: modifiers last.
+
+## Rustdoc-style snippets
+
+```rust
+// src/remapper.rs (signatures)
+use anyhow::Result;
+use evdev_rs::{InputEvent, TimeVal};
+use std::collections::HashSet;
+
+impl crate::remapper::InputMapper {
+    pub fn run_mapper(&mut self) -> Result<()>;
+    pub fn update_with_event(&mut self, event: &InputEvent, code: crate::mapping::KeyCode) -> Result<()>;
+    fn compute_keys(&self) -> HashSet<crate::mapping::KeyCode>;
+    fn compute_and_apply_keys(&mut self, time: &TimeVal) -> Result<()>;
+}
+```
+
+```rust
+// Ordering example: press modifiers first, release modifiers last
+// src/remapper.rs (excerpt)
+fn compute_and_apply_keys(&mut self, time: &TimeVal) -> Result<()> {
+    let desired = self.compute_keys();
+    let mut to_release: Vec<_> = self.output_keys.difference(&desired).cloned().collect();
+    let mut to_press: Vec<_> = desired.difference(&self.output_keys).cloned().collect();
+    to_release.sort_by(modifiers_last);
+    self.emit_keys(&to_release, time, KeyEventType::Release)?;
+    to_press.sort_by(modifiers_first);
+    self.emit_keys(&to_press, time, KeyEventType::Press)?;
+    Ok(())
+}
+```
+
+```rust
+// Tap vs hold (200ms threshold) — src/remapper.rs (excerpt)
+use std::time::Duration;
+if let Some(Mapping::DualRole { tap, .. }) = self.lookup_dual_role_mapping(code) {
+    if let Some(tapping) = self.tapping.take() {
+        if tapping == code && timeval_diff(&event.time, &pressed_at) <= Duration::from_millis(200) {
+            self.emit_keys(&tap, &event.time, KeyEventType::Press)?;
+            self.emit_keys(&tap, &event.time, KeyEventType::Release)?;
+        }
+    }
+}
