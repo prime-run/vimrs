@@ -39,11 +39,8 @@ fn timeval_diff(newer: &TimeVal, older: &TimeVal) -> Duration {
     let secs = newer.tv_sec - older.tv_sec;
     let usecs = newer.tv_usec - older.tv_usec;
 
-    let (secs, usecs) = if usecs < 0 {
-        (secs - 1, usecs + MICROS_PER_SECOND)
-    } else {
-        (secs, usecs)
-    };
+    let (secs, usecs) =
+        if usecs < 0 { (secs - 1, usecs + MICROS_PER_SECOND) } else { (secs, usecs) };
 
     Duration::from_micros(((secs * MICROS_PER_SECOND) + usecs) as u64)
 }
@@ -65,8 +62,8 @@ pub struct InputMapper {
 
 fn enable_key_code(input: &mut Device, key: KeyCode) -> Result<()> {
     input
-        .enable(EventCode::EV_KEY(key.clone()))
-        .context(format!("enable key {:?}", key))?;
+        .enable(EventCode::EV_KEY(key))
+        .context(format!("enable key {key:?}"))?;
     Ok(())
 }
 
@@ -84,17 +81,17 @@ impl InputMapper {
             match map {
                 Mapping::DualRole { tap, hold, .. } => {
                     for t in tap {
-                        enable_key_code(&mut input, t.clone())?;
+                        enable_key_code(&mut input, *t)?;
                     }
                     for h in hold {
-                        enable_key_code(&mut input, h.clone())?;
+                        enable_key_code(&mut input, *h)?;
                     }
-                }
+                },
                 Mapping::Remap { output, .. } => {
                     for o in output {
-                        enable_key_code(&mut input, o.clone())?;
+                        enable_key_code(&mut input, *o)?;
                     }
-                }
+                },
             }
         }
 
@@ -125,12 +122,12 @@ impl InputMapper {
                 evdev_rs::ReadStatus::Success => {
                     if let EventCode::EV_KEY(ref key) = event.event_code {
                         log::trace!("IN {:?}", event);
-                        self.update_with_event(&event, key.clone())?;
+                        self.update_with_event(&event, *key)?;
                     } else {
                         log::trace!("PASSTHRU {:?}", event);
                         self.output.write_event(&event)?;
                     }
-                }
+                },
                 evdev_rs::ReadStatus::Sync => bail!("ReadStatus::Sync!"),
             }
         }
@@ -139,7 +136,11 @@ impl InputMapper {
     /// Compute the effective set of keys that are pressed
     fn compute_keys(&self) -> HashSet<KeyCode> {
         // Start with the input keys
-        let mut keys: HashSet<KeyCode> = self.input_state.keys().cloned().collect();
+        let mut keys: HashSet<KeyCode> = self
+            .input_state
+            .keys()
+            .cloned()
+            .collect();
 
         // First phase is to apply any DualRole mappings as they are likely to
         // be used to produce modifiers when held.
@@ -148,7 +149,7 @@ impl InputMapper {
                 if keys.contains(input) {
                     keys.remove(input);
                     for h in hold {
-                        keys.insert(h.clone());
+                        keys.insert(*h);
                     }
                 }
             }
@@ -167,7 +168,7 @@ impl InputMapper {
                         }
                     }
                     for o in output {
-                        keys.insert(o.clone());
+                        keys.insert(*o);
                         // Outputs that apply are not visible as
                         // inputs for later remap rules
                         if !is_modifier(o) {
@@ -241,7 +242,7 @@ impl InputMapper {
                         // so we've found our match
                         return Some(map.clone());
                     }
-                }
+                },
                 Mapping::Remap { input, .. } => {
                     // Look for a mapping that includes the current key.
                     // If part of a chord, all of its component keys must
@@ -259,7 +260,7 @@ impl InputMapper {
                     if code_matched && all_matched {
                         candidates.push(map);
                     }
-                }
+                },
             }
         }
 
@@ -267,12 +268,15 @@ impl InputMapper {
         // with the most active keys
         candidates.sort_by(|a, b| match (a, b) {
             (Mapping::Remap { input: input_a, .. }, Mapping::Remap { input: input_b, .. }) => {
-                input_a.len().cmp(&input_b.len()).reverse()
-            }
+                input_a
+                    .len()
+                    .cmp(&input_b.len())
+                    .reverse()
+            },
             _ => unreachable!(),
         });
 
-        candidates.get(0).map(|&m| m.clone())
+        candidates.first().map(|&m| m.clone())
     }
 
     pub fn update_with_event(&mut self, event: &InputEvent, code: KeyCode) -> Result<()> {
@@ -283,15 +287,13 @@ impl InputMapper {
                     None => {
                         self.write_event_and_sync(event)?;
                         return Ok(());
-                    }
+                    },
                     Some(p) => p,
                 };
 
                 self.compute_and_apply_keys(&event.time)?;
 
-                if let Some(Mapping::DualRole { tap, .. }) =
-                    self.lookup_dual_role_mapping(code.clone())
-                {
+                if let Some(Mapping::DualRole { tap, .. }) = self.lookup_dual_role_mapping(code) {
                     // If released quickly enough, becomes a tap press.
                     if let Some(tapping) = self.tapping.take() {
                         if tapping == code
@@ -302,42 +304,43 @@ impl InputMapper {
                         }
                     }
                 }
-            }
+            },
 
             KeyEventType::Press => {
-                self.input_state.insert(code.clone(), event.time.clone());
+                self.input_state
+                    .insert(code, event.time);
 
-                match self.lookup_mapping(code.clone()) {
+                match self.lookup_mapping(code) {
                     Some(_) => {
                         self.compute_and_apply_keys(&event.time)?;
                         self.tapping.replace(code);
-                    }
+                    },
                     None => {
                         // Just pass it through
                         self.cancel_pending_tap();
                         self.compute_and_apply_keys(&event.time)?;
-                    }
+                    },
                 }
-            }
+            },
             KeyEventType::Repeat => {
-                match self.lookup_mapping(code.clone()) {
+                match self.lookup_mapping(code) {
                     Some(Mapping::DualRole { hold, .. }) => {
                         self.emit_keys(&hold, &event.time, KeyEventType::Repeat)?;
-                    }
+                    },
                     Some(Mapping::Remap { output, .. }) => {
                         let output: Vec<KeyCode> = output.iter().cloned().collect();
                         self.emit_keys(&output, &event.time, KeyEventType::Repeat)?;
-                    }
+                    },
                     None => {
                         // Just pass it through
                         self.cancel_pending_tap();
                         self.write_event_and_sync(event)?;
-                    }
+                    },
                 }
-            }
+            },
             KeyEventType::Unknown(_) => {
                 self.write_event_and_sync(event)?;
-            }
+            },
         }
 
         Ok(())
@@ -354,7 +357,7 @@ impl InputMapper {
         event_type: KeyEventType,
     ) -> Result<()> {
         for k in key {
-            let event = make_event(k.clone(), time, event_type);
+            let event = make_event(*k, time, event_type);
             self.write_event(&event)?;
         }
         self.generate_sync_event(time)?;
@@ -369,28 +372,29 @@ impl InputMapper {
 
     fn write_event(&mut self, event: &InputEvent) -> Result<()> {
         log::trace!("OUT: {:?}", event);
-        self.output.write_event(&event)?;
+        self.output.write_event(event)?;
         if let EventCode::EV_KEY(ref key) = event.event_code {
             let event_type = KeyEventType::from_value(event.value);
             match event_type {
                 KeyEventType::Press | KeyEventType::Repeat => {
-                    self.output_keys.insert(key.clone());
-                }
+                    self.output_keys.insert(*key);
+                },
                 KeyEventType::Release => {
                     self.output_keys.remove(key);
-                }
-                _ => {}
+                },
+                _ => {},
             }
         }
         Ok(())
     }
 
     fn generate_sync_event(&self, time: &TimeVal) -> Result<()> {
-        self.output.write_event(&InputEvent::new(
-            time,
-            &EventCode::EV_SYN(evdev_rs::enums::EV_SYN::SYN_REPORT),
-            0,
-        ))?;
+        self.output
+            .write_event(&InputEvent::new(
+                time,
+                &EventCode::EV_SYN(evdev_rs::enums::EV_SYN::SYN_REPORT),
+                0,
+            ))?;
         Ok(())
     }
 }
@@ -400,18 +404,18 @@ fn make_event(key: KeyCode, time: &TimeVal, event_type: KeyEventType) -> InputEv
 }
 
 fn is_modifier(key: &KeyCode) -> bool {
-    match key {
+    matches!(
+        key,
         KeyCode::KEY_FN
-        | KeyCode::KEY_LEFTALT
-        | KeyCode::KEY_RIGHTALT
-        | KeyCode::KEY_LEFTMETA
-        | KeyCode::KEY_RIGHTMETA
-        | KeyCode::KEY_LEFTCTRL
-        | KeyCode::KEY_RIGHTCTRL
-        | KeyCode::KEY_LEFTSHIFT
-        | KeyCode::KEY_RIGHTSHIFT => true,
-        _ => false,
-    }
+            | KeyCode::KEY_LEFTALT
+            | KeyCode::KEY_RIGHTALT
+            | KeyCode::KEY_LEFTMETA
+            | KeyCode::KEY_RIGHTMETA
+            | KeyCode::KEY_LEFTCTRL
+            | KeyCode::KEY_RIGHTCTRL
+            | KeyCode::KEY_LEFTSHIFT
+            | KeyCode::KEY_RIGHTSHIFT
+    )
 }
 
 /// Orders modifier keys ahead of non-modifier keys.
@@ -419,11 +423,7 @@ fn is_modifier(key: &KeyCode) -> bool {
 /// comparison, but that's ok for our purposes.
 fn modifiers_first(a: &KeyCode, b: &KeyCode) -> Ordering {
     if is_modifier(a) {
-        if is_modifier(b) {
-            Ordering::Equal
-        } else {
-            Ordering::Less
-        }
+        if is_modifier(b) { Ordering::Equal } else { Ordering::Less }
     } else if is_modifier(b) {
         Ordering::Greater
     } else {

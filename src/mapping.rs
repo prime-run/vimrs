@@ -1,5 +1,5 @@
 use anyhow::Context;
-pub use evdev_rs::enums::{EventCode, EventType, EV_KEY as KeyCode};
+pub use evdev_rs::enums::{EV_KEY as KeyCode, EventCode, EventType};
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::path::Path;
@@ -26,11 +26,7 @@ impl MappingConfig {
         for remap in config_file.remap {
             mappings.push(remap.into());
         }
-        Ok(Self {
-            device_name: config_file.device_name,
-            phys: config_file.phys,
-            mappings,
-        })
+        Ok(Self { device_name: config_file.device_name, phys: config_file.phys, mappings })
     }
 }
 
@@ -63,9 +59,9 @@ struct KeyCodeWrapper {
     pub code: KeyCode,
 }
 
-impl Into<KeyCode> for KeyCodeWrapper {
-    fn into(self) -> KeyCode {
-        self.code
+impl From<KeyCodeWrapper> for KeyCode {
+    fn from(val: KeyCodeWrapper) -> Self {
+        val.code
     }
 }
 
@@ -79,6 +75,7 @@ pub enum ConfigError {
 
 impl std::convert::TryFrom<String> for KeyCodeWrapper {
     type Error = ConfigError;
+
     fn try_from(s: String) -> Result<KeyCodeWrapper, Self::Error> {
         match EventCode::from_str(&EventType::EV_KEY, &s) {
             Some(code) => match code {
@@ -97,12 +94,20 @@ struct DualRoleConfig {
     tap: Vec<KeyCodeWrapper>,
 }
 
-impl Into<Mapping> for DualRoleConfig {
-    fn into(self) -> Mapping {
+impl From<DualRoleConfig> for Mapping {
+    fn from(val: DualRoleConfig) -> Self {
         Mapping::DualRole {
-            input: self.input.into(),
-            hold: self.hold.into_iter().map(Into::into).collect(),
-            tap: self.tap.into_iter().map(Into::into).collect(),
+            input: val.input.into(),
+            hold: val
+                .hold
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            tap: val
+                .tap
+                .into_iter()
+                .map(Into::into)
+                .collect(),
             // mode: Mode::Insert,
         }
     }
@@ -114,11 +119,19 @@ struct RemapConfig {
     output: Vec<KeyCodeWrapper>,
 }
 
-impl Into<Mapping> for RemapConfig {
-    fn into(self) -> Mapping {
+impl From<RemapConfig> for Mapping {
+    fn from(val: RemapConfig) -> Self {
         Mapping::Remap {
-            input: self.input.into_iter().map(Into::into).collect(),
-            output: self.output.into_iter().map(Into::into).collect(),
+            input: val
+                .input
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            output: val
+                .output
+                .into_iter()
+                .map(Into::into)
+                .collect(),
             // mode: Mode::Insert,
         }
     }

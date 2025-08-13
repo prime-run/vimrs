@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use evdev_rs::{Device, DeviceWrapper};
 use std::cmp::Ordering;
 use std::path::PathBuf;
@@ -27,15 +27,14 @@ impl DeviceInfo {
         let mut devices = Self::obtain_device_list()?;
 
         if let Some(phys) = phys {
-            match devices.iter().position(|item| item.phys == phys) {
+            match devices
+                .iter()
+                .position(|item| item.phys == phys)
+            {
                 Some(idx) => return Ok(devices.remove(idx)),
                 None => {
-                    bail!(
-                        "Requested device `{}` with phys=`{}` was not found",
-                        name,
-                        phys
-                    );
-                }
+                    bail!("Requested device `{}` with phys=`{}` was not found", name, phys);
+                },
             }
         }
 
@@ -54,10 +53,9 @@ impl DeviceInfo {
                 log::warn!("{:?}", dev);
             }
             log::warn!(
-                "evremap will use the first entry. If you want to \
-                       use one of the others, add the corresponding phys \
-                       value to your configuration, for example, \
-                       `phys = \"{}\"` for the second entry in the list.",
+                "evremap will use the first entry. If you want to use one of the others, add the \
+                 corresponding phys value to your configuration, for example, `phys = \"{}\"` for \
+                 the second entry in the list.",
                 devices_with_name[1].phys
             );
         }
@@ -94,7 +92,7 @@ impl DeviceInfo {
         devices.sort_by(|a, b| match a.name.cmp(&b.name) {
             Ordering::Equal => {
                 event_number_from_path(&a.path).cmp(&event_number_from_path(&b.path))
-            }
+            },
             different => different,
         });
         Ok(devices)

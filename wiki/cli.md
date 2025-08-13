@@ -3,6 +3,7 @@
 CLI is defined in `src/main.rs` using `clap` derive. Entry enum: `Opt`.
 
 ## Subcommands
+
 - `ListDevices`
   - Calls `deviceinfo::list_devices()` to print Name/Path/Phys for `/dev/input/event*`.
 - `ListKeys`
@@ -19,15 +20,18 @@ CLI is defined in `src/main.rs` using `clap` derive. Entry enum: `Opt`.
   - Creates mapper: `InputMapper::create_mapper(device.path, mappings)` and runs `run_mapper()`.
 
 ## Device acquisition (`get_device`)
+
 - Try `DeviceInfo::with_name(name, phys)` once.
 - If not found and `wait_for_device = true`, poll every 1s, backing off to 10s max (`Duration` backoff loop), until device appears. Logs debug errors during polling.
 
 ## Logging (`setup_logger`)
+
 - `env_logger` with default level `Info`.
 - Environment variables:
   - `EVREMAP_LOG` — e.g., `trace`, `debug`, `info`.
   - `EVREMAP_LOG_STYLE` — controls style (e.g., `always`).
 
 ## Process model
+
 - Requires exclusive grab of the input device; typically needs root or proper udev permissions/group membership.
 - Virtual output device is derived from the input device capabilities.

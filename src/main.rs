@@ -12,7 +12,11 @@ mod remapper;
 
 /// Remap libinput evdev keyboard inputs
 #[derive(Debug, Parser)]
-#[command(name = "evremap", about, author = "Wez Furlong")]
+#[command(
+    name = "evremap",
+    about,
+    author = "Wez Furlong"
+)]
 enum Opt {
     /// Rather than running the remapper, list currently available devices.
     /// This is helpful to check their names when setting up the initial
@@ -69,14 +73,14 @@ pub fn list_keys() -> Result<()> {
     let mut keys: Vec<String> = EventCode::EV_KEY(KeyCode::KEY_RESERVED)
         .iter()
         .filter_map(|code| match code {
-            EventCode::EV_KEY(_) => Some(format!("{}", code)),
+            EventCode::EV_KEY(_) => Some(format!("{code}")),
             _ => None,
         })
         .collect();
     keys.sort();
-    for key in keys {
-        // println!("{}", key);
-    }
+    // for key in keys {
+    //     // println!("{}", key);
+    // }
     Ok(())
 }
 
@@ -100,7 +104,7 @@ fn get_device(
         Err(err) if !wait_for_device => return Err(err),
         Err(err) => {
             log::warn!("{err:#}. Will wait until it is attached.");
-        }
+        },
     }
 
     const MAX_SLEEP: Duration = Duration::from_secs(10);
@@ -115,7 +119,7 @@ fn get_device(
             Ok(dev) => return Ok(dev),
             Err(err) => {
                 log::debug!("{err:#}");
-            }
+            },
         }
     }
 }
@@ -124,10 +128,7 @@ fn debug_events(device: DeviceInfo) -> Result<()> {
     let f =
         std::fs::File::open(&device.path).context(format!("opening {}", device.path.display()))?;
     let input = evdev_rs::Device::new_from_file(f).with_context(|| {
-        format!(
-            "failed to create new Device from file {}",
-            device.path.display()
-        )
+        format!("failed to create new Device from file {}", device.path.display())
     })?;
 
     loop {
@@ -138,7 +139,7 @@ fn debug_events(device: DeviceInfo) -> Result<()> {
                 if let EventCode::EV_KEY(key) = event.event_code {
                     log::info!("{key:?} {}", event.value);
                 }
-            }
+            },
             evdev_rs::ReadStatus::Sync => anyhow::bail!("ReadStatus::Sync!"),
         }
     }
@@ -154,18 +155,10 @@ fn main() -> Result<()> {
         Opt::DebugEvents { device_name, phys } => {
             let device_info = get_device(&device_name, phys.as_deref(), false)?;
             debug_events(device_info)
-        }
-        Opt::Remap {
-            config_file,
-            delay,
-            device_name,
-            phys,
-            wait_for_device,
-        } => {
-            let mut mapping_config = MappingConfig::from_file(&config_file).context(format!(
-                "loading MappingConfig from {}",
-                config_file.display()
-            ))?;
+        },
+        Opt::Remap { config_file, delay, device_name, phys, wait_for_device } => {
+            let mut mapping_config = MappingConfig::from_file(&config_file)
+                .context(format!("loading MappingConfig from {}", config_file.display()))?;
 
             if let Some(device) = device_name {
                 mapping_config.device_name = Some(device);
@@ -174,13 +167,15 @@ fn main() -> Result<()> {
                 mapping_config.phys = Some(phys);
             }
 
-            let device_name = mapping_config.device_name.as_deref().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "device_name is missing; \
-                        specify it either in the config file or via the --device-name \
-                        command line option"
-                )
-            })?;
+            let device_name = mapping_config
+                .device_name
+                .as_deref()
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "device_name is missing; specify it either in the config file or via the \
+                         --device-name command line option"
+                    )
+                })?;
 
             log::warn!("Short delay: release any keys now!");
             std::thread::sleep(Duration::from_secs_f64(delay));
@@ -190,6 +185,6 @@ fn main() -> Result<()> {
 
             let mut mapper = InputMapper::create_mapper(device_info.path, mapping_config.mappings)?;
             mapper.run_mapper()
-        }
+        },
     }
 }

@@ -14,3 +14,12 @@ env_logger = "0.11"
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "1.0"
 toml = "0.8"
+
+
+[profile.release]
+strip = true
+lto = "fat"
+# debug = 1
+codegen-units = 1
+# overflow-checks = false
+panic = "abort"

@@ -3,6 +3,7 @@
 This repo is intentionally small. Each module has a focused responsibility.
 
 ## `src/main.rs`
+
 - __CLI enum `Opt`__: `ListDevices`, `ListKeys`, `DebugEvents { device_name, phys }`, `Remap { config_file, delay, device_name, phys, wait_for_device }`.
 - __Logging__: `setup_logger()` uses `env_logger` with `EVREMAP_LOG` and `EVREMAP_LOG_STYLE`; default filter `Info`.
 - __Device acquisition__: `get_device(name, phys, wait_for_device)` optionally polls until found with backoff (1s..10s).
@@ -10,6 +11,7 @@ This repo is intentionally small. Each module has a focused responsibility.
 - __List keys__: `list_keys()` constructs all `EV_KEY` values (printing currently commented out).
 
 ## `src/deviceinfo.rs`
+
 - __`DeviceInfo`__: `{ name: String, path: PathBuf, phys: String }`.
 - __`with_path(path)`__: opens a single `/dev/input/event*` node and reads `name`/`phys`.
 - __`with_name(name, phys)`__: selects device by `phys` if provided; else first device whose `name` matches. Warns if multiple match.
@@ -17,6 +19,7 @@ This repo is intentionally small. Each module has a focused responsibility.
 - __`obtain_device_list()`__ (private): scans `/dev/input`, opens each `event*` file, sorts by `(name, event_number)`.
 
 ## `src/mapping.rs`
+
 - __Key alias__: `type KeyCode = evdev_rs::enums::EV_KEY`.
 - __`MappingConfig`__: `{ device_name: Option<String>, phys: Option<String>, mappings: Vec<Mapping> }`.
   - `from_file(path)`: reads TOML into `ConfigFile`, converts `[[dual_role]]` then `[[remap]]` into `Vec<Mapping>` (dual-role entries always precede remaps).
@@ -27,6 +30,7 @@ This repo is intentionally small. Each module has a focused responsibility.
 - __Config structs__: `DualRoleConfig`, `RemapConfig`, `ConfigFile` with `#[serde(default)]` on arrays/optionals.
 
 ## `src/remapper.rs`
+
 - __`InputMapper` state__:
   - `input: Device`, `output: UInputDevice`
   - `input_state: HashMap<KeyCode, TimeVal>` (keys currently down + when pressed)
