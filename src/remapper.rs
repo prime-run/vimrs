@@ -45,6 +45,12 @@ fn timeval_diff(newer: &TimeVal, older: &TimeVal) -> Duration {
     Duration::from_micros(((secs * MICROS_PER_SECOND) + usecs) as u64)
 }
 
+#[derive(Debug, Clone)]
+struct ActiveRemap {
+    inputs: HashSet<KeyCode>,
+    outputs: HashSet<KeyCode>,
+}
+
 pub struct InputMapper {
     input: Device,
     output: UInputDevice,
@@ -58,6 +64,13 @@ pub struct InputMapper {
     tapping: Option<KeyCode>,
 
     output_keys: HashSet<KeyCode>,
+
+    /// Keys that should be suppressed (not passed through) until they are physically released.
+    /// Used to avoid leaking base keys when a chord remap is broken.
+    suppressed_until_released: HashSet<KeyCode>,
+
+    /// Tracks chords that were activated so we know what to suppress if any input is released.
+    active_remaps: Vec<ActiveRemap>,
 }
 
 fn enable_key_code(input: &mut Device, key: KeyCode) -> Result<()> {
@@ -108,6 +121,8 @@ impl InputMapper {
             input_state: HashMap::new(),
             output_keys: HashSet::new(),
             tapping: None,
+            suppressed_until_released: HashSet::new(),
+            active_remaps: Vec::new(),
             mappings,
         })
     }
@@ -141,6 +156,11 @@ impl InputMapper {
             .keys()
             .cloned()
             .collect();
+
+        // Suppress any base keys flagged until released so we don't leak them
+        for s in &self.suppressed_until_released {
+            keys.remove(s);
+        }
 
         // First phase is to apply any DualRole mappings as they are likely to
         // be used to produce modifiers when held.
@@ -288,6 +308,30 @@ impl InputMapper {
                     Some(p) => p,
                 };
 
+                // Drop suppressions for keys that are no longer physically held
+                self.prune_suppressed_keys();
+
+                // If this release breaks an active remap, suppress the remaining non-modifier
+                // inputs in that chord until they are released, and clear the active remap.
+                let mut ended_inputs: Vec<HashSet<KeyCode>> = vec![];
+                for ar in &self.active_remaps {
+                    if ar.inputs.contains(&code) {
+                        ended_inputs.push(ar.inputs.clone());
+                    }
+                }
+                if !ended_inputs.is_empty() {
+                    // Remove any active remap that referenced the released key
+                    self.active_remaps.retain(|ar| !ar.inputs.contains(&code));
+                    // Suppress any remaining non-modifier inputs that are still held
+                    for inputs in ended_inputs {
+                        for k in inputs {
+                            if k != code && self.input_state.contains_key(&k) && !is_modifier(&k) {
+                                self.suppressed_until_released.insert(k);
+                            }
+                        }
+                    }
+                }
+
                 self.compute_and_apply_keys(&event.time)?;
 
                 if let Some(Mapping::DualRole { tap, .. }) = self.lookup_dual_role_mapping(code) {
@@ -303,11 +347,21 @@ impl InputMapper {
             },
 
             KeyEventType::Press => {
-                self.input_state
-                    .insert(code, event.time);
+                self.input_state.insert(code, event.time);
+
+                // Drop suppressions for keys that are no longer physically held
+                self.prune_suppressed_keys();
 
                 match self.lookup_mapping(code) {
-                    Some(_) => {
+                    Some(Mapping::DualRole { .. }) => {
+                        self.compute_and_apply_keys(&event.time)?;
+                        self.tapping.replace(code);
+                    },
+                    Some(Mapping::Remap { input, output }) => {
+                        // Register active remap for this chord if not already present
+                        if !self.active_remaps.iter().any(|ar| ar.inputs == input) {
+                            self.active_remaps.push(ActiveRemap { inputs: input.clone(), outputs: output.clone() });
+                        }
                         self.compute_and_apply_keys(&event.time)?;
                         self.tapping.replace(code);
                     },
@@ -328,9 +382,14 @@ impl InputMapper {
                         self.emit_keys(&output, &event.time, KeyEventType::Repeat)?;
                     },
                     None => {
-                        // Just pass it through
-                        self.cancel_pending_tap();
-                        self.write_event_and_sync(event)?;
+                        // If this key is suppressed due to a broken chord, swallow repeats
+                        if self.suppressed_until_released.contains(&code) {
+                            // do nothing
+                        } else {
+                            // Just pass it through
+                            self.cancel_pending_tap();
+                            self.write_event_and_sync(event)?;
+                        }
                     },
                 }
             },
@@ -344,6 +403,12 @@ impl InputMapper {
 
     fn cancel_pending_tap(&mut self) {
         self.tapping.take();
+    }
+
+    fn prune_suppressed_keys(&mut self) {
+        // Keep only keys that are still physically held down
+        self.suppressed_until_released
+            .retain(|k| self.input_state.contains_key(k));
     }
 
     fn emit_keys(
