@@ -26,6 +26,9 @@ impl MappingConfig {
         for remap in config_file.remap {
             mappings.push(remap.into());
         }
+        for ms in config_file.mode_switch {
+            mappings.push(ms.into());
+        }
         Ok(Self { device_name: config_file.device_name, phys: config_file.phys, mappings })
     }
 }
@@ -49,8 +52,14 @@ pub enum Mapping {
     Remap {
         input: HashSet<KeyCode>,
         output: HashSet<KeyCode>,
+        /// optional mode name; if present, this remap only applies when the
+        /// global active mode matches this value.
+        mode: Option<String>,
         // mode: Mode,
     },
+    /// switch the global active mode when this chord is pressed.
+    /// NOTE: hmm good idea?
+    ModeSwitch { input: HashSet<KeyCode>, mode: String },
 }
 
 #[derive(Debug, Deserialize)]
@@ -117,6 +126,8 @@ impl From<DualRoleConfig> for Mapping {
 struct RemapConfig {
     input: Vec<KeyCodeWrapper>,
     output: Vec<KeyCodeWrapper>,
+    #[serde(default)]
+    mode: Option<String>,
 }
 
 impl From<RemapConfig> for Mapping {
@@ -132,7 +143,31 @@ impl From<RemapConfig> for Mapping {
                 .into_iter()
                 .map(Into::into)
                 .collect(),
+            // NOTE: If no mode is specified, treat it as the implicit "default" mode.
+            mode: Some(
+                val.mode
+                    .unwrap_or_else(|| "default".to_string()),
+            ),
             // mode: Mode::Insert,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ModeSwitchConfig {
+    input: Vec<KeyCodeWrapper>,
+    mode: String,
+}
+
+impl From<ModeSwitchConfig> for Mapping {
+    fn from(val: ModeSwitchConfig) -> Self {
+        Mapping::ModeSwitch {
+            input: val
+                .input
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            mode: val.mode,
         }
     }
 }
@@ -150,4 +185,7 @@ struct ConfigFile {
 
     #[serde(default)]
     remap: Vec<RemapConfig>,
+
+    #[serde(default)]
+    mode_switch: Vec<ModeSwitchConfig>,
 }
