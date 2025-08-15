@@ -451,9 +451,15 @@ impl InputMapper {
                         self.tapping.replace(code);
                     },
                     Some(Mapping::ModeSwitch { input, mode, .. }) => {
+                        // Consume base keys for this switch so they don't leak through
+                        for k in input.iter() {
+                            self.suppressed_until_released.insert(*k);
+                        }
+
                         // Persistently switch active mode
                         self.active_mode = Some(mode.clone());
-                        // Track for suppression on release
+
+                        // Track for suppression management on release
                         if !self
                             .active_remaps
                             .iter()
@@ -464,6 +470,7 @@ impl InputMapper {
                                 outputs: HashSet::new(),
                             });
                         }
+
                         self.compute_and_apply_keys(&event.time)?;
                         self.cancel_pending_tap();
                     },
