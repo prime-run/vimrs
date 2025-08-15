@@ -173,12 +173,17 @@ impl InputMapper {
         // First phase is to apply any DualRole mappings as they are likely to
         // be used to produce modifiers when held.
         for map in &self.mappings {
-            if let Mapping::DualRole { input, hold, .. } = map
-                && keys.contains(input)
-            {
-                keys.remove(input);
-                for h in hold {
-                    keys.insert(*h);
+            if let Mapping::DualRole { input, hold, mode, .. } = map {
+                let mode_ok = match (mode.as_ref(), self.active_mode.as_ref()) {
+                    (None, _) => true,
+                    (Some(_m), None) => false,
+                    (Some(m), Some(active)) => m == active,
+                };
+                if mode_ok && keys.contains(input) {
+                    keys.remove(input);
+                    for h in hold {
+                        keys.insert(*h);
+                    }
                 }
             }
         }
@@ -186,13 +191,18 @@ impl InputMapper {
         let mut keys_minus_remapped = keys.clone();
 
         for map in &self.mappings {
-            if let Mapping::ModeSwitch { input, .. } = map
-                && input.is_subset(&keys_minus_remapped)
-            {
-                for i in input {
-                    keys.remove(i);
-                    if !is_modifier(i) {
-                        keys_minus_remapped.remove(i);
+            if let Mapping::ModeSwitch { input, scope, .. } = map {
+                let scope_ok = match (scope.as_ref(), self.active_mode.as_ref()) {
+                    (None, _) => true,
+                    (Some(_s), None) => false,
+                    (Some(s), Some(active)) => s == active,
+                };
+                if scope_ok && input.is_subset(&keys_minus_remapped) {
+                    for i in input {
+                        keys.remove(i);
+                        if !is_modifier(i) {
+                            keys_minus_remapped.remove(i);
+                        }
                     }
                 }
             }
@@ -266,12 +276,17 @@ impl InputMapper {
 
     fn lookup_dual_role_mapping(&self, code: KeyCode) -> Option<Mapping> {
         for map in &self.mappings {
-            if let Mapping::DualRole { input, .. } = map
-                && *input == code
-            {
-                // A DualRole mapping has the highest precedence
-                // so we've found our match
-                return Some(map.clone());
+            if let Mapping::DualRole { input, mode, .. } = map {
+                let mode_ok = match (mode.as_ref(), self.active_mode.as_ref()) {
+                    (None, _) => true,
+                    (Some(_m), None) => false,
+                    (Some(m), Some(active)) => m == active,
+                };
+                if mode_ok && *input == code {
+                    // A DualRole mapping has the highest precedence
+                    // so we've found our match
+                    return Some(map.clone());
+                }
             }
         }
         None
@@ -312,7 +327,7 @@ impl InputMapper {
                         candidates.push(map);
                     }
                 },
-                Mapping::ModeSwitch { input, .. } => {
+                Mapping::ModeSwitch { input, scope, .. } => {
                     // Include mode switch candidates as well
                     let mut code_matched = false;
                     let mut all_matched = true;
@@ -324,7 +339,12 @@ impl InputMapper {
                             break;
                         }
                     }
-                    if code_matched && all_matched {
+                    let scope_ok = match (scope.as_ref(), self.active_mode.as_ref()) {
+                        (None, _) => true,
+                        (Some(_s), None) => false,
+                        (Some(s), Some(active)) => s == active,
+                    };
+                    if scope_ok && code_matched && all_matched {
                         candidates.push(map);
                     }
                 },
@@ -430,7 +450,7 @@ impl InputMapper {
                         self.compute_and_apply_keys(&event.time)?;
                         self.tapping.replace(code);
                     },
-                    Some(Mapping::ModeSwitch { input, mode }) => {
+                    Some(Mapping::ModeSwitch { input, mode, .. }) => {
                         // Persistently switch active mode
                         self.active_mode = Some(mode.clone());
                         // Track for suppression on release
