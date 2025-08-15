@@ -1,0 +1,14 @@
+- feat: config default kb opt in : disable all chords for mode exept defined ones in config (don't allow in default mode?)
+- redesign whole configuration spesification (my depart toml?)
+- support for timed sequences (implement when finished with remap and hold chords)
+
+
+
+# should remapped chords follow mappings ?! (vim or nvim! approach!), 
+
+- pros:
+	- much simpler cofg filrs
+	- easier `lua` configuration
+
+- cons:
+	- dangerous since it's system wide! (might lose keys in bad configs)

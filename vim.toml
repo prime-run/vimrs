@@ -1,58 +1,73 @@
 device_name = "Usb KeyBoard Usb KeyBoard"
 
-[[dual_role]]
+
+[modes.default]
+
+[[modes.default.dual_role]]
 input = "KEY_CAPSLOCK"
 hold = ["KEY_LEFTCTRL"]
 tap = ["KEY_ESC"]
 
-[[remap]]
+[[modes.default.remap]]
 input = ["KEY_RIGHTALT"]
 output = ["KEY_BACKSPACE"]
 mode = "normal"
 
 
-[[remap]]
+[[modes.default.remap]]
 input = ["KEY_LEFTALT", "KEY_K"]
 output = ["KEY_UP"]
 
-[[remap]]
+[[modes.default.remap]]
 input = ["KEY_LEFTALT", "KEY_J"]
 output = ["KEY_DOWN"]
 
-[[remap]]
+[[modes.default.remap]]
 input = ["KEY_LEFTALT", "KEY_H"]
 output = ["KEY_LEFT"]
 
-[[remap]]
+[[modes.default.remap]]
 input = ["KEY_LEFTALT", "KEY_L"]
 output = ["KEY_RIGHT"]
 
 
-[[remap]]
+[[modes.default.remap]]
 input = ["KEY_LEFTALT", "KEY_F"]
 output = ["KEY_MINUS"]
 
 
-[[remap]]
+[[modes.default.remap]]
 input = ["KEY_LEFTALT", "KEY_LEFTBRACE"]
 output = ["KEY_LEFTSHIFT", "KEY_9"]
 
 
-[[remap]]
+[[modes.default.remap]]
 input = ["KEY_LEFTALT", "KEY_RIGHTBRACE"]
 output = ["KEY_LEFTSHIFT", "KEY_0"]
 
 
-[[mode_switch]]
+[[modes.default.mode_switch]]
 input = ["KEY_LEFTALT", "KEY_N"]
 mode = "nav"
 
 
-[[mode_switch]]
+[[modes.default.switch]]
+input = ["KEY_LEFTALT", "KEY_V"]
+mode = "nav"
+
+
+[modes.nav]
+
+[[modes.nav.remap]]
+input = ["KEY_B"]
+output = ["KEY_LEFTSHIFT", "KEY_LEFTCTRL", "KEY_LEFT"]
+
+
+[[modes.nav.remap]]
+input = ["KEY_W"]
+output = ["KEY_LEFTSHIFT", "KEY_LEFTCTRL", "KEY_RIGHT"]
+
+
+[[modes.nav.switch]]
 input = ["KEY_ESC"]
 mode = "default"
-
-[[remap]]
-mode = "nav"
-input = ["KEY_H"]
-output = ["KEY_LEFT"]
