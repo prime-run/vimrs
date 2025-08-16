@@ -1,0 +1,19 @@
+device_name = "Usb KeyBoard Usb KeyBoard"
+
+
+[modes.default]
+
+
+[[modes.default.switch]]
+input = ["KEY_LEFTALT", "KEY_V"]
+mode = "gaming"
+
+
+[modes.gaming]
+exclusive = true
+
+# Only these inputs are allowed in this mode:
+# - KEY_W (remap example)
+# - KEY_ESC (mode switch)
+remap = [{ input = ["KEY_W"], output = ["KEY_UP"] }]
+switch = [{ input = ["KEY_ESC"], mode = "default" }]

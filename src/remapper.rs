@@ -839,4 +839,51 @@ mod tests {
             test::black_box(work_keys);
         });
     }
+
+    #[test]
+    fn noop_remap_suppresses_key() {
+        let mappings = vec![Mapping::Remap {
+            input: [KEY_A].iter().cloned().collect(),
+            output: [].iter().cloned().collect(),
+            mode: Some("gaming".to_string()),
+        }];
+
+        let mut s = RemapEngine::new(mappings);
+        s.active_mode = Some("gaming".to_string());
+
+        s.input_state.insert(KEY_A, TimeVal::new(0, 0));
+        s.active_remaps.push(ActiveRemap {
+            inputs: [KEY_A].iter().cloned().collect(),
+            outputs: [].iter().cloned().collect(),
+            outputs_vec: vec![],
+            kind: ActiveKind::Remap,
+            mode: Some("gaming".to_string()),
+        });
+
+        let keys = s.compute_keys();
+        assert!(keys.is_empty(), "no-op remap should suppress KEY_A");
+    }
+
+    // #[test]
+    // fn default_escape_modeswitch_recognized() {
+    //     let mappings = vec![Mapping::ModeSwitch {
+    //         input: [KEY_LEFTCTRL, KEY_BACKSLASH].iter().cloned().collect(),
+    //         mode: "default".to_string(),
+    //         scope: None,
+    //     }];
+
+    //     let mut s = RemapEngine::new(mappings);
+    //     s.active_mode = Some("gaming".to_string());
+
+    //     s.input_state.insert(KEY_LEFTCTRL, TimeVal::new(0, 0));
+    //     let idx = s.lookup_mapping_index(KEY_BACKSLASH).expect("modeswitch should match");
+    //     match &s.mappings[idx] {
+    //         Mapping::ModeSwitch { mode, scope, input } => {
+    //             assert_eq!(mode, "default");
+    //             assert!(scope.is_none());
+    //             assert!(input.contains(&KEY_LEFTCTRL) && input.contains(&KEY_BACKSLASH));
+    //         }
+    //         _ => panic!("expected ModeSwitch mapping"),
+    //     }
+    // }
 }
