@@ -5,6 +5,13 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use thiserror::Error;
 
+fn all_ev_keys() -> Vec<KeyCode> {
+    EventCode::EV_KEY(KeyCode::KEY_RESERVED)
+        .iter()
+        .filter_map(|ec| if let EventCode::EV_KEY(k) = ec { Some(k) } else { None })
+        .collect()
+}
+
 #[derive(Debug, Clone)]
 pub struct MappingConfig {
     pub device_name: Option<String>,
@@ -26,59 +33,29 @@ impl MappingConfig {
         for remap in config_file.remap {
             mappings.push(remap.into());
         }
+
+        let has_global_default_switch = config_file
+            .mode_switch
+            .iter()
+            .any(|ms| ms.mode == "default");
+
+        let all_keys = all_ev_keys();
+
+        for (mode_name, section) in config_file.modes {
+            let allowed = section.allowed_inputs();
+            let is_exclusive = section.exclusive;
+            mappings.extend(section.into_mappings(&mode_name));
+            if is_exclusive {
+                mappings.extend(exclusive_noops(&mode_name, &allowed, &all_keys));
+            }
+        }
+
         for ms in config_file.mode_switch {
             mappings.push(ms.into());
         }
 
-        for (mode_name, section) in config_file.modes {
-            for dual in section.dual_role {
-                let map = Mapping::DualRole {
-                    input: dual.input.into(),
-                    hold: dual
-                        .hold
-                        .into_iter()
-                        .map(Into::into)
-                        .collect(),
-                    tap: dual
-                        .tap
-                        .into_iter()
-                        .map(Into::into)
-                        .collect(),
-                    mode: Some(mode_name.clone()),
-                };
-                mappings.push(map);
-            }
+        inject_emergency_default(&mut mappings, has_global_default_switch);
 
-            for remap in section.remap {
-                let map = Mapping::Remap {
-                    input: remap
-                        .input
-                        .into_iter()
-                        .map(Into::into)
-                        .collect(),
-                    output: remap
-                        .output
-                        .into_iter()
-                        .map(Into::into)
-                        .collect(),
-                    mode: Some(mode_name.clone()),
-                };
-                mappings.push(map);
-            }
-
-            for ms in section.switch_to {
-                let map = Mapping::ModeSwitch {
-                    input: ms
-                        .input
-                        .into_iter()
-                        .map(Into::into)
-                        .collect(),
-                    mode: ms.mode,
-                    scope: Some(mode_name.clone()),
-                };
-                mappings.push(map);
-            }
-        }
         Ok(Self { device_name: config_file.device_name, phys: config_file.phys, mappings })
     }
 }
@@ -111,6 +88,65 @@ pub enum Mapping {
         mode: String,
         scope: Option<String>,
     },
+}
+
+fn exclusive_noops(mode: &str, allowed: &HashSet<KeyCode>, all_keys: &[KeyCode]) -> Vec<Mapping> {
+    let mut out = Vec::new();
+    for &k in all_keys {
+        if !allowed.contains(&k) {
+            let mut input = HashSet::new();
+            input.insert(k);
+            out.push(Mapping::Remap {
+                input,
+                output: HashSet::new(),
+                mode: Some(mode.to_string()),
+            });
+        }
+    }
+    out
+}
+
+fn inject_emergency_default(mappings: &mut Vec<Mapping>, has_global_default_switch: bool) {
+    if has_global_default_switch {
+        return;
+    }
+
+    mappings.push(Mapping::ModeSwitch {
+        input: [KeyCode::KEY_LEFTCTRL, KeyCode::KEY_BACKSLASH]
+            .iter()
+            .cloned()
+            .collect(),
+        mode: "default".to_string(),
+        scope: None,
+    });
+
+    // let somemodes = Mapping::ModeSwitch {
+    //     input: (KeyCode::KEY_LEFTCTRL, KeyCode::KEY_BACKSLASH),
+    //     mode: (),
+    //     scope: (),
+    // };
+    //
+    // let somemap = Mapping::Remap {
+    //     input: [KEY_LEFTCTRL, KEY_BACKSLASH]
+    //         .iter()
+    //         .cloned()
+    //         .collect(),
+    //     output: [].iter().cloned().collect(),
+    //     mode: Some("default".to_string()),
+    // };
+
+    // left C would do for now!
+    // i'll add it back in future if i have to write a macro for manuall mapping
+    //
+    //
+    // let mut right_ctrl_bs: HashSet<KeyCode> = HashSet::new();
+    // right_ctrl_bs.insert(KeyCode::KEY_RIGHTCTRL);
+    // right_ctrl_bs.insert(KeyCode::KEY_BACKSLASH);
+    // mappings.push(Mapping::ModeSwitch {
+    //     input: right_ctrl_bs,
+    //     mode: "default".to_string(),
+    //     scope: None,
+    // });
 }
 
 #[derive(Debug, Deserialize)]
@@ -233,6 +269,79 @@ struct ModeSection {
     remap: Vec<RemapConfig>,
     #[serde(default, rename = "switch")]
     switch_to: Vec<ModeSwitchConfig>,
+    #[serde(default)]
+    exclusive: bool,
+}
+
+impl ModeSection {
+    fn allowed_inputs(&self) -> HashSet<KeyCode> {
+        let mut allowed: HashSet<KeyCode> = HashSet::new();
+        for dual in &self.dual_role {
+            allowed.insert(dual.input.code);
+        }
+        for remap in &self.remap {
+            for i in &remap.input {
+                allowed.insert(i.code);
+            }
+        }
+        for ms in &self.switch_to {
+            for i in &ms.input {
+                allowed.insert(i.code);
+            }
+        }
+        allowed
+    }
+
+    fn into_mappings(self, mode: &str) -> Vec<Mapping> {
+        let mut out = Vec::new();
+
+        for dual in self.dual_role {
+            out.push(Mapping::DualRole {
+                input: dual.input.into(),
+                hold: dual
+                    .hold
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+                tap: dual
+                    .tap
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+                mode: Some(mode.to_string()),
+            });
+        }
+
+        for remap in self.remap {
+            out.push(Mapping::Remap {
+                input: remap
+                    .input
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+                output: remap
+                    .output
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+                mode: Some(mode.to_string()),
+            });
+        }
+
+        for ms in self.switch_to {
+            out.push(Mapping::ModeSwitch {
+                input: ms
+                    .input
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+                mode: ms.mode,
+                scope: Some(mode.to_string()),
+            });
+        }
+
+        out
+    }
 }
 
 #[derive(Debug, Deserialize)]
