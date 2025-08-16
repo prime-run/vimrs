@@ -1,121 +1,152 @@
-# Event Pipeline & Algorithms
+# Event Processing Pipeline
 
-This describes how hardware events are transformed into output events.
+This document details the exact pipeline from physical key events to synthesized
+output as implemented in `src/remapper.rs`. It focuses on state transitions,
+lookup rules, suppression, timing, and emission ordering.
 
-## Sources and Sinks
+## Core types and state
 
-- Input: `evdev_rs::Device` reading from `/dev/input/event*`.
-- Output: `evdev_rs::UInputDevice` created from input capabilities.
-- Sync: `SYN_REPORT` after each batch write.
+- `InputMapper` owns devices and a `RemapEngine` state.
+- `RemapEngine` mutable fields:
+  - `input_state: HashMap<KeyCode, TimeVal>` — physical keys currently pressed (with press time).
+  - `output_keys: HashSet<KeyCode>` — keys currently pressed on the uinput device.
+  - `mappings: Vec<Mapping>` — ordered list (`DualRole`, `Remap`, `ModeSwitch`).
+  - `tapping: Option<KeyCode>` — DualRole tap candidate (single-key).
+  - `suppressed_until_released: HashSet<KeyCode>` — inputs to ignore until physical release.
+  - `active_remaps: Vec<ActiveRemap>` — engaged remaps or switches.
+  - `active_mode: Option<String>` — current mode; defaults to `Some("default")`.
 
-## Event loop (`InputMapper::run_mapper`)
-
-1. Read next event with `ReadFlag::NORMAL | BLOCKING`.
-2. If not `EV_KEY`: pass-through via `write_event_and_sync`.
-3. If `EV_KEY`: call `update_with_event(event, key)`.
-
-## Internal state (`InputMapper`)
-
-- `input_state: HashMap<KeyCode, TimeVal>` — keys currently down (press time).
-- `output_keys: HashSet<KeyCode>` — keys currently down on virtual device.
-- `mappings: Vec<Mapping>` — ordered: all DualRole entries, then Remap entries (from `MappingConfig`).
-- `tapping: Option<KeyCode>` — candidate for 200ms tap.
-
-## Key handling (`update_with_event`)
-
-- Press:
-  - Record `input_state[key] = time`.
-  - If any mapping matches (`lookup_mapping`), compute/apply desired keys and mark `tapping = key`.
-  - Else: cancel pending tap, compute/apply (effectively pass-through).
-- Release:
-  - Remove from `input_state`.
-  - Recompute/apply desired keys.
-  - If a DualRole exists for this key and release within 200ms, emit `tap` as press+release.
-- Repeat:
-  - DualRole: emit `hold` with Repeat.
-  - Remap: emit `output` with Repeat.
-  - None: pass-through.
-
-## Computing desired keys (`compute_keys`)
-
-Two passes over `self.mappings`:
-
-1. DualRole pass:
-   - If `input` is in current `keys`, replace it with all `hold` keys.
-2. Remap pass (file order):
-   - Maintain `keys_minus_remapped` (copy of keys without non-modifier inputs/outputs that applied).
-   - If `input ⊆ keys_minus_remapped`:
-     - Remove `input` from `keys` (non-modifiers from both `keys` and `keys_minus_remapped`).
-     - Insert all `output` into `keys` and remove non-modifier outputs from `keys_minus_remapped`.
-
-Notes:
-
-- This prevents chaining on generated outputs unless they are modifiers.
-- Ordering of `[[remap]]` in the file matters (earlier rules can shadow later ones).
-
-## Applying differences (`compute_and_apply_keys`)
-
-- Compute set diff between `desired_keys` and `output_keys`.
-- Release extra keys first (sorted with `modifiers_last`).
-- Press missing keys (sorted with `modifiers_first`).
-- Emit `SYN_REPORT` once after each batch (`generate_sync_event`).
-
-## Tap vs Hold
-
-- Threshold: 200ms (`timeval_diff`).
-- On quick release of a DualRole `input` and if it is the current `tapping` key, emit `tap` press+release.
-- Longer holds are reflected through `compute_keys` as `hold` contributions.
-
-## Lookup rules
-
-- `lookup_dual_role_mapping(code)` — exact key match, highest precedence.
-- `lookup_mapping(code)` — returns DualRole if exact match, else among matching Remap chords that include `code`, pick the one with the largest `input` set.
-
-## Modifiers
-
-- `is_modifier` identifies standard modifiers. They get priority ordering:
-  - Press: modifiers first.
-  - Release: modifiers last.
-
-## Rustdoc-style snippets
+## Loop and dispatch
 
 ```rust
-// src/remapper.rs (signatures)
-use anyhow::Result;
-use evdev_rs::{InputEvent, TimeVal};
-use std::collections::HashSet;
-
-impl crate::remapper::InputMapper {
-    pub fn run_mapper(&mut self) -> Result<()>;
-    pub fn update_with_event(&mut self, event: &InputEvent, code: crate::mapping::KeyCode) -> Result<()>;
-    fn compute_keys(&self) -> HashSet<crate::mapping::KeyCode>;
-    fn compute_and_apply_keys(&mut self, time: &TimeVal) -> Result<()>;
-}
-```
-
-```rust
-// Ordering example: press modifiers first, release modifiers last
-// src/remapper.rs (excerpt)
-fn compute_and_apply_keys(&mut self, time: &TimeVal) -> Result<()> {
-    let desired = self.compute_keys();
-    let mut to_release: Vec<_> = self.output_keys.difference(&desired).cloned().collect();
-    let mut to_press: Vec<_> = desired.difference(&self.output_keys).cloned().collect();
-    to_release.sort_by(modifiers_last);
-    self.emit_keys(&to_release, time, KeyEventType::Release)?;
-    to_press.sort_by(modifiers_first);
-    self.emit_keys(&to_press, time, KeyEventType::Press)?;
-    Ok(())
-}
-```
-
-```rust
-// Tap vs hold (200ms threshold) — src/remapper.rs (excerpt)
-use std::time::Duration;
-if let Some(Mapping::DualRole { tap, .. }) = self.lookup_dual_role_mapping(code) {
-    if let Some(tapping) = self.tapping.take() {
-        if tapping == code && timeval_diff(&event.time, &pressed_at) <= Duration::from_millis(200) {
-            self.emit_keys(&tap, &event.time, KeyEventType::Press)?;
-            self.emit_keys(&tap, &event.time, KeyEventType::Release)?;
+loop {
+    let (status, ev) = input.next_event(ReadFlag::NORMAL | ReadFlag::BLOCKING)?;
+    match status {
+        ReadStatus::Success => {
+            if let EventCode::EV_KEY(code) = ev.event_code {
+                update_with_event(&ev, code)?;
+            } else {
+                output.write_event(&ev)?; // pass-through non-key
+            }
         }
+        ReadStatus::Sync => bail!("ReadStatus::Sync"),
     }
 }
+```
+
+`update_with_event()` deserializes `KeyEventType` from the value and dispatches to `on_press`,
+`on_release`, or `on_repeat` logic in-place.
+
+## Press handling
+
+- Insert `(code -> time)` into `input_state`.
+- Drop any entries in `suppressed_until_released` no longer physically held in `input_state`.
+- If `code` is in `suppressed_until_released`, swallow the press (no output), but keep state.
+- `lookup_mapping_index(code)` under `active_mode` chooses the best matching mapping:
+  - `DualRole { input == code }` wins immediately (exact match, if mode matches):
+    - Push `ActiveRemap { kind=DualRole, inputs=[code], outputs=hold.., mode }`.
+    - Set `tapping = Some(code)`.
+    - `compute_and_apply_keys(time)`.
+  - Else, among `Remap` whose `input` set contains `code` and is a subset of currently pressed
+    physical keys, pick the largest chord; on ties, prefer `ModeSwitch` over `Remap`.
+  - `ModeSwitch` candidate: if `scope` is `None` or equals `active_mode`, then:
+    - Set `active_mode = Some(mode)`.
+    - Push `ActiveRemap { kind=ModeSwitch, inputs, outputs=[], mode: Some(mode) }`.
+    - Add all inputs of the switch to `suppressed_until_released`.
+    - Clear pending `tapping`.
+    - `compute_and_apply_keys(time)`.
+- If no mapping matches:
+  - Clear pending `tapping` (a non-dual-role press disqualifies a tap).
+  - `compute_and_apply_keys(time)` to reflect physical press (subject to suppression and DualRole holds).
+
+## Release handling
+
+- Remove `code` from `input_state`.
+- Prune `suppressed_until_released` for keys not physically held anymore.
+- End any `active_remaps` whose inputs include `code`.
+- If a `Remap` is ended while other chord members remain held, add those remaining non-modifier
+  inputs to `suppressed_until_released` to prevent leakage of partial chords.
+- `compute_and_apply_keys(time)`.
+- DualRole tap check:
+  - If `tapping == Some(code)` and `lookup_dual_role_index(code)` exists and the press duration
+    `time - input_state_timestamp` is <= 200ms, emit the `tap` sequence immediately:
+    - For each key `k` in `tap`: press `k`, sync, then release `k`, sync.
+  - Clear `tapping` if it was `code`.
+
+## Repeat handling
+
+- If `code` is in `suppressed_until_released`, swallow the repeat.
+- Try `emit_repeat_for_active_remap(code, time)`:
+  - Identify the most specific active remap containing `code` and valid under `active_mode`.
+  - If it’s DualRole, repeat the `hold` outputs.
+  - If it’s Remap, repeat the `output` set.
+  - ModeSwitch has no repeat.
+- Otherwise fallback lookup:
+  - `lookup_dual_role_index(code)` => repeat its `hold`.
+  - Else `lookup_mapping_index(code)` => if Remap, repeat its `output`.
+- Sync after repeats.
+
+## Computing desired key set
+
+```rust
+fn compute_keys(&self) -> HashSet<KeyCode> {
+    // 1) Start from physically held keys
+    let mut keys = self.input_state.keys().cloned().collect::<HashSet<_>>();
+
+    // 2) Remove suppressed
+    for s in &self.suppressed_until_released { keys.remove(s); }
+
+    // 3) DualRole: substitute holds for inputs under active mode
+    for m in &self.mappings {
+        if let Mapping::DualRole { input, hold, mode, .. } = m {
+            let mode_ok = match (mode.as_ref(), self.active_mode.as_ref()) {
+                (None, _) => true,
+                (Some(_), None) => false,
+                (Some(m), Some(a)) => m == a,
+            };
+            if mode_ok && keys.contains(input) {
+                keys.remove(input);
+                for h in hold { keys.insert(*h); }
+            }
+        }
+    }
+
+    // 4) Apply engaged Remaps under active mode (inputs removed, outputs added)
+    for ar in &self.active_remaps {
+        if ar.kind == ActiveKind::Remap {
+            let mode_ok = match (ar.mode.as_ref(), self.active_mode.as_ref()) {
+                (None, _) => true,
+                (Some(_), None) => false,
+                (Some(m), Some(a)) => m == a,
+            };
+            if mode_ok {
+                for i in &ar.inputs { keys.remove(i); }
+                for o in &ar.outputs { keys.insert(*o); }
+            }
+        }
+    }
+
+    keys
+}
+```
+
+## Applying key diffs and ordering
+
+- `compute_and_apply_keys(time)` compares desired keys vs `output_keys` and emits a minimal diff.
+- Order matters due to modifiers:
+  - Presses: modifiers first — `to_press.sort_by_key(|k| !is_modifier(*k))`.
+  - Releases: modifiers last — `to_release.sort_by_key(|k| is_modifier(*k))`.
+- Events are batched between `SYN_REPORT`s using `write_event_and_sync()`.
+
+## Mode interactions
+
+- `active_mode` gates DualRole substitutions and engaged Remap application.
+- `ModeSwitch { scope }` can be global (`None`) or scoped to a specific mode.
+- When a `ModeSwitch` chord engages, its input keys are added to `suppressed_until_released`.
+
+## Suppression rules
+
+- When a chord breaks (a member released) while other members remain held, the remaining
+  physical inputs are added to `suppressed_until_released` until they are physically released.
+- Suppression prevents unintended fallthrough presses or repeats.
+- Suppressed keys swallow press/repeat; release is still processed to drop suppression.
