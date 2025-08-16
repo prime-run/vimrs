@@ -1,7 +1,6 @@
 use crate::mapping::*;
 use anyhow::*;
 use evdev_rs::{Device, DeviceWrapper, GrabMode, InputEvent, ReadFlag, TimeVal, UInputDevice};
-use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
@@ -323,11 +322,11 @@ impl InputMapper {
             .collect();
 
         if !to_release.is_empty() {
-            to_release.sort_by(modifiers_last);
+            to_release.sort_by_key(|k| is_modifier(*k));
             self.emit_keys(&to_release, time, KeyEventType::Release)?;
         }
         if !to_press.is_empty() {
-            to_press.sort_by(modifiers_first);
+            to_press.sort_by_key(|k| !is_modifier(*k));
             self.emit_keys(&to_press, time, KeyEventType::Press)?;
         }
         Ok(())
@@ -411,7 +410,7 @@ impl InputMapper {
                         for k in inputs {
                             if k != code
                                 && self.state.input_state.contains_key(&k)
-                                && !is_modifier(&k)
+                                && !is_modifier(k)
                             {
                                 self.state
                                     .suppressed_until_released
@@ -662,7 +661,8 @@ fn make_event(key: KeyCode, time: &TimeVal, event_type: KeyEventType) -> InputEv
     InputEvent::new(time, &EventCode::EV_KEY(key), event_type.value())
 }
 
-fn is_modifier(key: &KeyCode) -> bool {
+#[inline(always)]
+fn is_modifier(key: KeyCode) -> bool {
     matches!(
         key,
         KeyCode::KEY_FN
@@ -677,20 +677,6 @@ fn is_modifier(key: &KeyCode) -> bool {
     )
 }
 
-fn modifiers_first(a: &KeyCode, b: &KeyCode) -> Ordering {
-    if is_modifier(a) {
-        if is_modifier(b) { Ordering::Equal } else { Ordering::Less }
-    } else if is_modifier(b) {
-        Ordering::Greater
-    } else {
-        Ordering::Equal
-    }
-}
-
-fn modifiers_last(a: &KeyCode, b: &KeyCode) -> Ordering {
-    modifiers_first(a, b).reverse()
-}
-
 #[cfg(test)]
 mod tests {
     extern crate test;
@@ -698,6 +684,8 @@ mod tests {
     use evdev_rs::enums::EV_KEY::*;
     use std::collections::HashSet;
 
+    // TODO: load from config file!
+    // its getting too messy
     #[test]
     fn basic_remap() {
         let mappings = vec![Mapping::Remap {
@@ -724,8 +712,80 @@ mod tests {
     }
 
     #[test]
-    fn test_modifier_sorting() {
-        let mut keys = vec![
+    fn test_remap_edge() {
+        let mappings = vec![
+            Mapping::Remap {
+                input: [KEY_LEFTALT, KEY_F]
+                    .iter()
+                    .cloned()
+                    .collect(),
+                output: [KEY_MINUS].iter().cloned().collect(),
+                mode: Some("default".to_string()),
+            },
+            Mapping::Remap {
+                input: [KEY_LEFTALT, KEY_LEFTBRACE]
+                    .iter()
+                    .cloned()
+                    .collect(),
+                output: [KEY_LEFTSHIFT, KEY_9]
+                    .iter()
+                    .cloned()
+                    .collect(),
+                mode: Some("default".to_string()),
+            },
+        ];
+
+        let mut s = RemapEngine::new(mappings);
+
+        s.input_state
+            .insert(KEY_LEFTALT, TimeVal::new(0, 0));
+
+        s.input_state
+            .insert(KEY_F, TimeVal::new(0, 1));
+        s.active_remaps.push(ActiveRemap {
+            inputs: [KEY_LEFTALT, KEY_F]
+                .iter()
+                .cloned()
+                .collect(),
+            outputs: [KEY_MINUS].iter().cloned().collect(),
+            outputs_vec: vec![KEY_MINUS],
+            kind: ActiveKind::Remap,
+            mode: Some("default".to_string()),
+        });
+
+        let keys_after_f = s.compute_keys();
+        let mut expected_after_f = HashSet::new();
+        expected_after_f.insert(KEY_MINUS);
+        println!("after_f out={:?} exp={:?}", keys_after_f, expected_after_f);
+        assert_eq!(keys_after_f, expected_after_f);
+
+        s.input_state
+            .insert(KEY_LEFTBRACE, TimeVal::new(0, 2));
+        s.active_remaps.push(ActiveRemap {
+            inputs: [KEY_LEFTALT, KEY_LEFTBRACE]
+                .iter()
+                .cloned()
+                .collect(),
+            outputs: [KEY_LEFTSHIFT, KEY_9]
+                .iter()
+                .cloned()
+                .collect(),
+            outputs_vec: vec![KEY_LEFTSHIFT, KEY_9],
+            kind: ActiveKind::Remap,
+            mode: Some("default".to_string()),
+        });
+
+        let keys_after_leftbrace = s.compute_keys();
+        let mut expected_after_leftbrace = HashSet::new();
+        expected_after_leftbrace.insert(KEY_MINUS);
+        expected_after_leftbrace.insert(KEY_LEFTSHIFT);
+        expected_after_leftbrace.insert(KEY_9);
+        assert_eq!(keys_after_leftbrace, expected_after_leftbrace);
+    }
+
+    #[test]
+    fn test_modifier() {
+        let mut keys: Vec<KeyCode> = vec![
             KEY_A,
             KEY_LEFTSHIFT,
             KEY_B,
@@ -734,35 +794,33 @@ mod tests {
             KEY_LEFTALT,
         ];
 
-        keys.sort_by(|a, b| modifiers_first(a, b));
+        keys.sort_by_key(|k| !is_modifier(*k));
         assert!(
             keys[0..3]
                 .iter()
-                .all(|k| is_modifier(k))
+                .all(|k| is_modifier(*k))
         );
         assert!(
             keys[3..6]
                 .iter()
-                .all(|k| !is_modifier(k))
+                .all(|k| !is_modifier(*k))
         );
 
-        // Test modifiers_last
-        keys.sort_by(|a, b| modifiers_last(a, b));
+        keys.sort_by_key(|k| is_modifier(*k));
         assert!(
             keys[0..3]
                 .iter()
-                .all(|k| !is_modifier(k))
+                .all(|k| !is_modifier(*k))
         );
         assert!(
             keys[3..6]
                 .iter()
-                .all(|k| is_modifier(k))
+                .all(|k| is_modifier(*k))
         );
     }
 
     #[bench]
     fn bench_modifier_sorting(b: &mut test::Bencher) {
-        // Create a larger, more realistic set of keys
         let keys: Vec<KeyCode> = (0..100)
             .map(|i| {
                 if i % 5 == 0 {
@@ -777,7 +835,7 @@ mod tests {
 
         b.iter(|| {
             let mut work_keys = keys.clone();
-            work_keys.sort_by(|a, b| modifiers_first(a, b));
+            work_keys.sort_by_key(|k| !is_modifier(*k));
             test::black_box(work_keys);
         });
     }

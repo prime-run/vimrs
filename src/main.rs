@@ -12,7 +12,6 @@ mod deviceinfo;
 mod mapping;
 mod remapper;
 
-/// Remap libinput evdev keyboard inputs
 #[derive(Debug, Parser)]
 #[command(
     name = "evremap",
@@ -20,52 +19,31 @@ mod remapper;
     author = "Wez Furlong"
 )]
 enum Opt {
-    /// Rather than running the remapper, list currently available devices.
-    /// This is helpful to check their names when setting up the initial
-    /// configuration
     ListDevices,
 
-    /// Show a list of possible KEY_XXX values
     ListKeys,
 
-    /// Listen to events and print them out to facilitate learning
-    /// which keys/buttons have which labels for your device(s)
     DebugEvents {
-        /// Specify the device name of interest
         #[arg(long)]
         device_name: String,
 
-        /// Specify the phys device in case multiple devices have
-        /// the same name
         #[arg(long)]
         phys: Option<String>,
     },
 
-    /// Load a remapper config and run the remapper.
-    /// This usually requires running as root to obtain exclusive access
-    /// to the input devices.
     Remap {
-        /// Specify the configuration file to be loaded
         #[arg(name = "CONFIG-FILE")]
         config_file: PathBuf,
 
-        /// Number of seconds for user to release keys on startup
         #[arg(short, long, default_value = "2")]
         delay: f64,
 
-        /// Override the device name specified by the config file
         #[arg(long)]
         device_name: Option<String>,
 
-        /// Override the phys device specified by the config file
         #[arg(long)]
         phys: Option<String>,
 
-        /// If the device isn't found on startup, wait forever
-        /// until the device is plugged in. This works by polling
-        /// the set of devices every few seconds. It is not as
-        /// efficient as setting up a udev rule to spawn evremap,
-        /// but is simpler to setup ad-hoc.
         #[arg(long)]
         wait_for_device: bool,
     },
@@ -80,9 +58,7 @@ pub fn list_keys() -> Result<()> {
         })
         .collect();
     keys.sort();
-    // for key in keys {
-    //     // println!("{}", key);
-    // }
+
     Ok(())
 }
 

@@ -30,9 +30,7 @@ impl MappingConfig {
             mappings.push(ms.into());
         }
 
-        // Nested modes: scope rules under each named mode
         for (mode_name, section) in config_file.modes {
-            // Dual roles scoped to this mode
             for dual in section.dual_role {
                 let map = Mapping::DualRole {
                     input: dual.input.into(),
@@ -51,7 +49,6 @@ impl MappingConfig {
                 mappings.push(map);
             }
 
-            // Remaps scoped to this mode
             for remap in section.remap {
                 let map = Mapping::Remap {
                     input: remap
@@ -69,7 +66,6 @@ impl MappingConfig {
                 mappings.push(map);
             }
 
-            // Switch chords defined under this mode; active only while in this mode
             for ms in section.switch_to {
                 let map = Mapping::ModeSwitch {
                     input: ms
