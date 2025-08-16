@@ -1,7 +1,6 @@
 use crate::mapping::*;
 use anyhow::*;
 use evdev_rs::{Device, DeviceWrapper, GrabMode, InputEvent, ReadFlag, TimeVal, UInputDevice};
-use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
@@ -45,36 +44,201 @@ fn timeval_diff(newer: &TimeVal, older: &TimeVal) -> Duration {
     Duration::from_micros(((secs * MICROS_PER_SECOND) + usecs) as u64)
 }
 
-// FIX: ...
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ActiveKind {
+    Remap,
+    ModeSwitch,
+    DualRole,
+}
+
 #[derive(Debug, Clone)]
 struct ActiveRemap {
     inputs: HashSet<KeyCode>,
     outputs: HashSet<KeyCode>,
+    outputs_vec: Vec<KeyCode>,
+    kind: ActiveKind,
+    mode: Option<String>,
+}
+
+struct RemapEngine {
+    input_state: HashMap<KeyCode, TimeVal>,
+    mappings: Vec<Mapping>,
+    tapping: Option<KeyCode>,
+    output_keys: HashSet<KeyCode>,
+    suppressed_until_released: HashSet<KeyCode>,
+    active_remaps: Vec<ActiveRemap>,
+    active_mode: Option<String>,
+}
+
+impl RemapEngine {
+    fn new(mappings: Vec<Mapping>) -> Self {
+        Self {
+            input_state: HashMap::new(),
+            output_keys: HashSet::new(),
+            tapping: None,
+            suppressed_until_released: HashSet::new(),
+            active_remaps: Vec::new(),
+            active_mode: Some("default".to_string()),
+            mappings,
+        }
+    }
+
+    fn compute_keys(&self) -> HashSet<KeyCode> {
+        let mut keys: HashSet<KeyCode> = self
+            .input_state
+            .keys()
+            .cloned()
+            .collect();
+        for s in &self.suppressed_until_released {
+            keys.remove(s);
+        }
+
+        for map in &self.mappings {
+            if let Mapping::DualRole { input, hold, mode, .. } = map {
+                let mode_ok = match (mode.as_ref(), self.active_mode.as_ref()) {
+                    (None, _) => true,
+                    (Some(_m), None) => false,
+                    (Some(m), Some(active)) => m == active,
+                };
+                if mode_ok && keys.contains(input) {
+                    keys.remove(input);
+                    for h in hold {
+                        keys.insert(*h);
+                    }
+                }
+            }
+        }
+
+        for ar in &self.active_remaps {
+            if ar.kind == ActiveKind::Remap {
+                let mode_ok = match (ar.mode.as_ref(), self.active_mode.as_ref()) {
+                    (None, _) => true,
+                    (Some(_m), None) => false,
+                    (Some(m), Some(active)) => m == active,
+                };
+                if mode_ok {
+                    for i in &ar.inputs {
+                        keys.remove(i);
+                    }
+                    for o in &ar.outputs {
+                        keys.insert(*o);
+                    }
+                }
+            }
+        }
+
+        keys
+    }
+
+    fn lookup_dual_role_index(&self, code: KeyCode) -> Option<usize> {
+        for (idx, map) in self.mappings.iter().enumerate() {
+            if let Mapping::DualRole { input, mode, .. } = map {
+                let mode_ok = match (mode.as_ref(), self.active_mode.as_ref()) {
+                    (None, _) => true,
+                    (Some(_m), None) => false,
+                    (Some(m), Some(active)) => m == active,
+                };
+                if mode_ok && *input == code {
+                    return Some(idx);
+                }
+            }
+        }
+        None
+    }
+
+    fn lookup_mapping_index(&self, code: KeyCode) -> Option<usize> {
+        let mut best_idx: Option<usize> = None;
+        let mut best_len: usize = 0;
+        let mut best_pri: u8 = 0;
+        for (idx, map) in self.mappings.iter().enumerate() {
+            match map {
+                Mapping::DualRole { input, mode, .. } => {
+                    let mode_ok = match (mode.as_ref(), self.active_mode.as_ref()) {
+                        (None, _) => true,
+                        (Some(_m), None) => false,
+                        (Some(m), Some(active)) => m == active,
+                    };
+                    if mode_ok && *input == code {
+                        return Some(idx);
+                    }
+                },
+                Mapping::Remap { input, mode, .. } => {
+                    let mut code_matched = false;
+                    let mut all_matched = true;
+                    for i in input {
+                        if *i == code {
+                            code_matched = true;
+                        } else if !self.input_state.contains_key(i) {
+                            all_matched = false;
+                            break;
+                        }
+                    }
+                    let mode_ok = match (mode.as_ref(), self.active_mode.as_ref()) {
+                        (None, _) => true,
+                        (Some(_m), None) => false,
+                        (Some(m), Some(active)) => m == active,
+                    };
+                    if code_matched && all_matched && mode_ok {
+                        let cand_len = input.len();
+                        let cand_pri = 0u8;
+                        if best_idx.is_none()
+                            || cand_len > best_len
+                            || (cand_len == best_len && cand_pri > best_pri)
+                        {
+                            best_idx = Some(idx);
+                            best_len = cand_len;
+                            best_pri = cand_pri;
+                        }
+                    }
+                },
+                Mapping::ModeSwitch { input, scope, .. } => {
+                    let mut code_matched = false;
+                    let mut all_matched = true;
+                    for i in input {
+                        if *i == code {
+                            code_matched = true;
+                        } else if !self.input_state.contains_key(i) {
+                            all_matched = false;
+                            break;
+                        }
+                    }
+                    let scope_ok = match (scope.as_ref(), self.active_mode.as_ref()) {
+                        (None, _) => true,
+                        (Some(_s), None) => false,
+                        (Some(s), Some(active)) => s == active,
+                    };
+                    if scope_ok && code_matched && all_matched {
+                        let cand_len = input.len();
+                        let cand_pri = 1u8;
+                        if best_idx.is_none()
+                            || cand_len > best_len
+                            || (cand_len == best_len && cand_pri > best_pri)
+                        {
+                            best_idx = Some(idx);
+                            best_len = cand_len;
+                            best_pri = cand_pri;
+                        }
+                    }
+                },
+            }
+        }
+        best_idx
+    }
+
+    fn cancel_pending_tap(&mut self) {
+        self.tapping.take();
+    }
+
+    fn prune_suppressed_keys(&mut self) {
+        self.suppressed_until_released
+            .retain(|k| self.input_state.contains_key(k));
+    }
 }
 
 pub struct InputMapper {
     input: Device,
     output: UInputDevice,
-    /// If present in this map, the key is down since the instant
-    /// of its associated value
-    input_state: HashMap<KeyCode, TimeVal>,
-
-    mappings: Vec<Mapping>,
-
-    /// The most recent candidate for a tap function is held here
-    tapping: Option<KeyCode>,
-
-    output_keys: HashSet<KeyCode>,
-
-    /// Keys that should be suppressed (not passed through) until they are physically released.
-    /// Used to avoid leaking base keys when a chord remap is broken.
-    suppressed_until_released: HashSet<KeyCode>,
-
-    /// Tracks chords that were activated so we know what to suppress if any input is released.
-    active_remaps: Vec<ActiveRemap>,
-
-    /// Current active mode. Remaps with a `mode` only apply when this matches.
-    active_mode: Option<String>,
+    state: RemapEngine,
 }
 
 fn enable_key_code(input: &mut Device, key: KeyCode) -> Result<()> {
@@ -93,7 +257,6 @@ impl InputMapper {
 
         input.set_name(&format!("evremap Virtual input for {}", path.display()));
 
-        // Ensure that any remapped keys are supported by the generated output device
         for map in &mappings {
             match map {
                 Mapping::DualRole { tap, hold, .. } => {
@@ -109,9 +272,7 @@ impl InputMapper {
                         enable_key_code(&mut input, *o)?;
                     }
                 },
-                Mapping::ModeSwitch { .. } => {
-                    // No outputs to enable
-                },
+                Mapping::ModeSwitch { .. } => {},
             }
         }
 
@@ -122,17 +283,7 @@ impl InputMapper {
             .grab(GrabMode::Grab)
             .context(format!("grabbing exclusive access on {}", path.display()))?;
 
-        Ok(Self {
-            input,
-            output,
-            input_state: HashMap::new(),
-            output_keys: HashSet::new(),
-            tapping: None,
-            suppressed_until_released: HashSet::new(),
-            active_remaps: Vec::new(),
-            active_mode: Some("default".to_string()),
-            mappings,
-        })
+        Ok(Self { input, output, state: RemapEngine::new(mappings) })
     }
 
     pub fn run_mapper(&mut self) -> Result<()> {
@@ -156,227 +307,86 @@ impl InputMapper {
         }
     }
 
-    /// Compute the effective set of keys that are pressed
-    fn compute_keys(&self) -> HashSet<KeyCode> {
-        // Start with the input keys
-        let mut keys: HashSet<KeyCode> = self
-            .input_state
-            .keys()
-            .cloned()
-            .collect();
-
-        // Suppress any base keys flagged until released so we don't leak them
-        for s in &self.suppressed_until_released {
-            keys.remove(s);
-        }
-
-        // First phase is to apply any DualRole mappings as they are likely to
-        // be used to produce modifiers when held.
-        for map in &self.mappings {
-            if let Mapping::DualRole { input, hold, mode, .. } = map {
-                let mode_ok = match (mode.as_ref(), self.active_mode.as_ref()) {
-                    (None, _) => true,
-                    (Some(_m), None) => false,
-                    (Some(m), Some(active)) => m == active,
-                };
-                if mode_ok && keys.contains(input) {
-                    keys.remove(input);
-                    for h in hold {
-                        keys.insert(*h);
-                    }
-                }
-            }
-        }
-
-        let mut keys_minus_remapped = keys.clone();
-
-        for map in &self.mappings {
-            if let Mapping::ModeSwitch { input, scope, .. } = map {
-                let scope_ok = match (scope.as_ref(), self.active_mode.as_ref()) {
-                    (None, _) => true,
-                    (Some(_s), None) => false,
-                    (Some(s), Some(active)) => s == active,
-                };
-                if scope_ok && input.is_subset(&keys_minus_remapped) {
-                    for i in input {
-                        keys.remove(i);
-                        if !is_modifier(i) {
-                            keys_minus_remapped.remove(i);
-                        }
-                    }
-                }
-            }
-        }
-
-        // Second pass to apply Remap items
-        for map in &self.mappings {
-            if let Mapping::Remap { input, output, mode } = map {
-                let mode_ok = match (mode.as_ref(), self.active_mode.as_ref()) {
-                    (None, _) => true,
-                    (Some(_m), None) => false,
-                    (Some(m), Some(active)) => m == active,
-                };
-                if mode_ok && input.is_subset(&keys_minus_remapped) {
-                    for i in input {
-                        keys.remove(i);
-                        if !is_modifier(i) {
-                            keys_minus_remapped.remove(i);
-                        }
-                    }
-                    for o in output {
-                        keys.insert(*o);
-                        // Outputs that apply are not visible as
-                        // inputs for later remap rules
-                        if !is_modifier(o) {
-                            keys_minus_remapped.remove(o);
-                        }
-                    }
-                }
-            }
-        }
-
-        keys
-    }
-
-    /// Compute the difference between our desired set of keys
-    /// and the set of keys that are currently pressed in the
-    /// output device.
-    /// Release any keys that should not be pressed, and then
-    /// press any keys that should be pressed.
-    ///
-    /// When releasing, release modifiers last so that mappings
-    /// that produce eg: CTRL-C don't emit a random C character
-    /// when released.
-    ///
-    /// Similarly, when pressing, emit modifiers first so that
-    /// we don't emit C and then CTRL for such a mapping.
     fn compute_and_apply_keys(&mut self, time: &TimeVal) -> Result<()> {
-        let desired_keys = self.compute_keys();
+        let desired_keys = self.state.compute_keys();
         let mut to_release: Vec<KeyCode> = self
+            .state
             .output_keys
             .difference(&desired_keys)
             .cloned()
             .collect();
 
         let mut to_press: Vec<KeyCode> = desired_keys
-            .difference(&self.output_keys)
+            .difference(&self.state.output_keys)
             .cloned()
             .collect();
 
         if !to_release.is_empty() {
-            to_release.sort_by(modifiers_last);
+            to_release.sort_by_key(|k| is_modifier(*k));
             self.emit_keys(&to_release, time, KeyEventType::Release)?;
         }
         if !to_press.is_empty() {
-            to_press.sort_by(modifiers_first);
+            to_press.sort_by_key(|k| !is_modifier(*k));
             self.emit_keys(&to_press, time, KeyEventType::Press)?;
         }
         Ok(())
     }
 
-    fn lookup_dual_role_mapping(&self, code: KeyCode) -> Option<Mapping> {
-        for map in &self.mappings {
-            if let Mapping::DualRole { input, mode, .. } = map {
-                let mode_ok = match (mode.as_ref(), self.active_mode.as_ref()) {
-                    (None, _) => true,
-                    (Some(_m), None) => false,
-                    (Some(m), Some(active)) => m == active,
-                };
-                if mode_ok && *input == code {
-                    // A DualRole mapping has the highest precedence
-                    // so we've found our match
-                    return Some(map.clone());
+    fn emit_repeat_for_active_remap(&mut self, code: KeyCode, time: &TimeVal) -> Result<bool> {
+        let mut dual_idx: Option<usize> = None;
+        let mut best_remap_idx: Option<usize> = None;
+        let mut best_len: usize = 0;
+        for (idx, ar) in self
+            .state
+            .active_remaps
+            .iter()
+            .enumerate()
+        {
+            if matches!(ar.kind, ActiveKind::ModeSwitch) {
+                continue;
+            }
+            let mode_ok = match (ar.mode.as_ref(), self.state.active_mode.as_ref()) {
+                (None, _) => true,
+                (Some(_m), None) => false,
+                (Some(m), Some(active)) => m == active,
+            };
+            if mode_ok && ar.inputs.contains(&code) {
+                match ar.kind {
+                    ActiveKind::DualRole => {
+                        dual_idx = Some(idx);
+                        break;
+                    },
+                    ActiveKind::Remap => {
+                        let cand_len = ar.inputs.len();
+                        if best_remap_idx.is_none() || cand_len > best_len {
+                            best_remap_idx = Some(idx);
+                            best_len = cand_len;
+                        }
+                    },
+                    ActiveKind::ModeSwitch => {},
                 }
             }
         }
-        None
-    }
-
-    fn lookup_mapping(&self, code: KeyCode) -> Option<Mapping> {
-        let mut candidates = vec![];
-
-        for map in &self.mappings {
-            match map {
-                Mapping::DualRole { input, .. } => {
-                    if *input == code {
-                        // A DualRole mapping has the highest precedence
-                        // so we've found our match
-                        return Some(map.clone());
-                    }
-                },
-                Mapping::Remap { input, mode, .. } => {
-                    // Look for a mapping that includes the current key.
-                    // If part of a chord, all of its component keys must
-                    // also be pressed.
-                    let mut code_matched = false;
-                    let mut all_matched = true;
-                    for i in input {
-                        if *i == code {
-                            code_matched = true;
-                        } else if !self.input_state.contains_key(i) {
-                            all_matched = false;
-                            break;
-                        }
-                    }
-                    let mode_ok = match (mode.as_ref(), self.active_mode.as_ref()) {
-                        (None, _) => true,
-                        (Some(_m), None) => false,
-                        (Some(m), Some(active)) => m == active,
-                    };
-                    if code_matched && all_matched && mode_ok {
-                        candidates.push(map);
-                    }
-                },
-                Mapping::ModeSwitch { input, scope, .. } => {
-                    // Include mode switch candidates as well
-                    let mut code_matched = false;
-                    let mut all_matched = true;
-                    for i in input {
-                        if *i == code {
-                            code_matched = true;
-                        } else if !self.input_state.contains_key(i) {
-                            all_matched = false;
-                            break;
-                        }
-                    }
-                    let scope_ok = match (scope.as_ref(), self.active_mode.as_ref()) {
-                        (None, _) => true,
-                        (Some(_s), None) => false,
-                        (Some(s), Some(active)) => s == active,
-                    };
-                    if scope_ok && code_matched && all_matched {
-                        candidates.push(map);
-                    }
-                },
+        if let Some(idx) = dual_idx.or(best_remap_idx) {
+            let len = self.state.active_remaps[idx]
+                .outputs_vec
+                .len();
+            for i in 0..len {
+                let k = self.state.active_remaps[idx].outputs_vec[i];
+                let event = make_event(k, time, KeyEventType::Repeat);
+                self.write_event(&event)?;
             }
+            self.generate_sync_event(time)?;
+            return Ok(true);
         }
-
-        // Sort by most specific (largest input set), and prefer ModeSwitch over Remap on ties
-        candidates.sort_by(|a, b| {
-            let (len_a, pri_a) = match a {
-                Mapping::Remap { input, .. } => (input.len(), 0u8),
-                Mapping::ModeSwitch { input, .. } => (input.len(), 1u8),
-                _ => (0usize, 0u8),
-            };
-            let (len_b, pri_b) = match b {
-                Mapping::Remap { input, .. } => (input.len(), 0u8),
-                Mapping::ModeSwitch { input, .. } => (input.len(), 1u8),
-                _ => (0usize, 0u8),
-            };
-            // Descending by length, then descending by priority
-            len_b
-                .cmp(&len_a)
-                .then(pri_b.cmp(&pri_a))
-        });
-
-        candidates.first().map(|&m| m.clone())
+        Ok(false)
     }
 
     pub fn update_with_event(&mut self, event: &InputEvent, code: KeyCode) -> Result<()> {
         let event_type = KeyEventType::from_value(event.value);
         match event_type {
             KeyEventType::Release => {
-                let pressed_at = match self.input_state.remove(&code) {
+                let pressed_at = match self.state.input_state.remove(&code) {
                     None => {
                         self.write_event_and_sync(event)?;
                         return Ok(());
@@ -384,26 +394,27 @@ impl InputMapper {
                     Some(p) => p,
                 };
 
-                // Drop suppressions for keys that are no longer physically held
-                self.prune_suppressed_keys();
+                self.state.prune_suppressed_keys();
 
-                // If this release breaks an active remap, suppress the remaining non-modifier
-                // inputs in that chord until they are released, and clear the active remap.
                 let mut ended_inputs: Vec<HashSet<KeyCode>> = vec![];
-                for ar in &self.active_remaps {
+                for ar in &self.state.active_remaps {
                     if ar.inputs.contains(&code) {
                         ended_inputs.push(ar.inputs.clone());
                     }
                 }
                 if !ended_inputs.is_empty() {
-                    // Remove any active remap that referenced the released key
-                    self.active_remaps
+                    self.state
+                        .active_remaps
                         .retain(|ar| !ar.inputs.contains(&code));
-                    // Suppress any remaining non-modifier inputs that are still held
                     for inputs in ended_inputs {
                         for k in inputs {
-                            if k != code && self.input_state.contains_key(&k) && !is_modifier(&k) {
-                                self.suppressed_until_released.insert(k);
+                            if k != code
+                                && self.state.input_state.contains_key(&k)
+                                && !is_modifier(k)
+                            {
+                                self.state
+                                    .suppressed_until_released
+                                    .insert(k);
                             }
                         }
                     }
@@ -411,101 +422,182 @@ impl InputMapper {
 
                 self.compute_and_apply_keys(&event.time)?;
 
-                if let Some(Mapping::DualRole { tap, .. }) = self.lookup_dual_role_mapping(code) {
-                    // If released quickly enough, becomes a tap press.
-                    if let Some(tapping) = self.tapping.take()
-                        && tapping == code
-                        && timeval_diff(&event.time, &pressed_at) <= Duration::from_millis(200)
-                    {
-                        self.emit_keys(&tap, &event.time, KeyEventType::Press)?;
-                        self.emit_keys(&tap, &event.time, KeyEventType::Release)?;
-                    }
+                let mut tap_keys: Option<Vec<KeyCode>> = None;
+                if let Some(idx) = self.state.lookup_dual_role_index(code)
+                    && let Mapping::DualRole { tap, .. } = &self.state.mappings[idx]
+                {
+                    tap_keys = Some(tap.clone());
+                }
+                if let Some(tap_vec) = tap_keys
+                    && let Some(tapping) = self.state.tapping.take()
+                    && tapping == code
+                    && timeval_diff(&event.time, &pressed_at) <= Duration::from_millis(200)
+                {
+                    self.emit_keys(&tap_vec, &event.time, KeyEventType::Press)?;
+                    self.emit_keys(&tap_vec, &event.time, KeyEventType::Release)?;
                 }
             },
 
             KeyEventType::Press => {
-                self.input_state
+                self.state
+                    .input_state
                     .insert(code, event.time);
+                self.state.prune_suppressed_keys();
 
-                // Drop suppressions for keys that are no longer physically held
-                self.prune_suppressed_keys();
+                match self.state.lookup_mapping_index(code) {
+                    Some(idx) => match &self.state.mappings[idx] {
+                        Mapping::DualRole { .. } => {
+                            let (inputs_set, outputs_set, outputs_vec, mode_clone) = {
+                                if let Mapping::DualRole { hold, mode, .. } =
+                                    &self.state.mappings[idx]
+                                {
+                                    let mut s: HashSet<KeyCode> = HashSet::new();
+                                    s.insert(code);
+                                    let vec = hold.clone();
+                                    let set: HashSet<KeyCode> = hold.iter().cloned().collect();
+                                    (s, set, vec, mode.clone())
+                                } else {
+                                    unreachable!()
+                                }
+                            };
 
-                match self.lookup_mapping(code) {
-                    Some(Mapping::DualRole { .. }) => {
-                        self.compute_and_apply_keys(&event.time)?;
-                        self.tapping.replace(code);
-                    },
-                    Some(Mapping::Remap { input, output, .. }) => {
-                        // Register active remap for this chord if not already present
-                        if !self
-                            .active_remaps
-                            .iter()
-                            .any(|ar| ar.inputs == input)
-                        {
-                            self.active_remaps.push(ActiveRemap {
-                                inputs: input.clone(),
-                                outputs: output.clone(),
-                            });
-                        }
-                        self.compute_and_apply_keys(&event.time)?;
-                        self.tapping.replace(code);
-                    },
-                    Some(Mapping::ModeSwitch { input, mode, .. }) => {
-                        // Consume base keys for this switch so they don't leak through
-                        for k in input.iter() {
-                            self.suppressed_until_released.insert(*k);
-                        }
+                            if !self
+                                .state
+                                .active_remaps
+                                .iter()
+                                .any(|ar| ar.inputs == inputs_set)
+                            {
+                                self.state
+                                    .active_remaps
+                                    .push(ActiveRemap {
+                                        inputs: inputs_set,
+                                        outputs: outputs_set,
+                                        outputs_vec,
+                                        kind: ActiveKind::DualRole,
+                                        mode: mode_clone,
+                                    });
+                            }
 
-                        // Persistently switch active mode
-                        self.active_mode = Some(mode.clone());
+                            self.compute_and_apply_keys(&event.time)?;
+                            self.state.tapping.replace(code);
+                        },
+                        Mapping::Remap { .. } => {
+                            let (input_set, output_set, output_vec, mode_clone) = {
+                                if let Mapping::Remap { input, output, mode, .. } =
+                                    &self.state.mappings[idx]
+                                {
+                                    (
+                                        input.clone(),
+                                        output.clone(),
+                                        output
+                                            .iter()
+                                            .cloned()
+                                            .collect::<Vec<KeyCode>>(),
+                                        mode.clone(),
+                                    )
+                                } else {
+                                    unreachable!()
+                                }
+                            };
 
-                        // Track for suppression management on release
-                        if !self
-                            .active_remaps
-                            .iter()
-                            .any(|ar| ar.inputs == input)
-                        {
-                            self.active_remaps.push(ActiveRemap {
-                                inputs: input.clone(),
-                                outputs: HashSet::new(),
-                            });
-                        }
+                            if !self
+                                .state
+                                .active_remaps
+                                .iter()
+                                .any(|ar| ar.inputs == input_set)
+                            {
+                                self.state
+                                    .active_remaps
+                                    .push(ActiveRemap {
+                                        inputs: input_set,
+                                        outputs: output_set,
+                                        outputs_vec: output_vec,
+                                        kind: ActiveKind::Remap,
+                                        mode: mode_clone,
+                                    });
+                            }
+                            self.compute_and_apply_keys(&event.time)?;
+                            self.state.tapping.replace(code);
+                        },
+                        Mapping::ModeSwitch { .. } => {
+                            let (inputs_vec, inputs_set, mode_new) = {
+                                if let Mapping::ModeSwitch { input, mode, .. } =
+                                    &self.state.mappings[idx]
+                                {
+                                    let s: HashSet<KeyCode> = input.clone();
+                                    let v: Vec<KeyCode> = s.iter().cloned().collect();
+                                    (v, s, mode.clone())
+                                } else {
+                                    unreachable!()
+                                }
+                            };
 
-                        self.compute_and_apply_keys(&event.time)?;
-                        self.cancel_pending_tap();
+                            for k in &inputs_vec {
+                                self.state
+                                    .suppressed_until_released
+                                    .insert(*k);
+                            }
+
+                            self.state.active_mode = Some(mode_new);
+
+                            if !self
+                                .state
+                                .active_remaps
+                                .iter()
+                                .any(|ar| ar.inputs == inputs_set)
+                            {
+                                self.state
+                                    .active_remaps
+                                    .push(ActiveRemap {
+                                        inputs: inputs_set,
+                                        outputs: HashSet::new(),
+                                        outputs_vec: Vec::new(),
+                                        kind: ActiveKind::ModeSwitch,
+                                        mode: None,
+                                    });
+                            }
+
+                            self.compute_and_apply_keys(&event.time)?;
+                            self.state.cancel_pending_tap();
+                        },
                     },
                     None => {
-                        // Just pass it through
-                        self.cancel_pending_tap();
+                        self.state.cancel_pending_tap();
                         self.compute_and_apply_keys(&event.time)?;
                     },
                 }
             },
             KeyEventType::Repeat => {
-                match self.lookup_mapping(code) {
-                    Some(Mapping::DualRole { hold, .. }) => {
-                        self.emit_keys(&hold, &event.time, KeyEventType::Repeat)?;
-                    },
-                    Some(Mapping::Remap { output, .. }) => {
-                        let output: Vec<KeyCode> = output.iter().cloned().collect();
-                        self.emit_keys(&output, &event.time, KeyEventType::Repeat)?;
-                    },
-                    Some(Mapping::ModeSwitch { .. }) => {
-                        // Swallow repeats for mode switch chords
-                    },
-                    None => {
-                        // If this key is suppressed due to a broken chord, swallow repeats
-                        if self
-                            .suppressed_until_released
-                            .contains(&code)
-                        {
-                            // do nothing
-                        } else {
-                            // Just pass it through
-                            self.cancel_pending_tap();
-                            self.write_event_and_sync(event)?;
-                        }
-                    },
+                if self.emit_repeat_for_active_remap(code, &event.time)? {
+                } else {
+                    match self.state.lookup_mapping_index(code) {
+                        Some(idx) => {
+                            let mut to_emit: Option<Vec<KeyCode>> = None;
+                            match &self.state.mappings[idx] {
+                                Mapping::DualRole { hold, .. } => {
+                                    to_emit = Some(hold.clone());
+                                },
+                                Mapping::Remap { output, .. } => {
+                                    to_emit = Some(output.iter().cloned().collect());
+                                },
+                                Mapping::ModeSwitch { .. } => {},
+                            }
+                            if let Some(vec) = to_emit {
+                                self.emit_keys(&vec, &event.time, KeyEventType::Repeat)?;
+                            }
+                        },
+                        None => {
+                            if self
+                                .state
+                                .suppressed_until_released
+                                .contains(&code)
+                            {
+                            } else {
+                                self.state.cancel_pending_tap();
+                                self.write_event_and_sync(event)?;
+                            }
+                        },
+                    }
                 }
             },
             KeyEventType::Unknown(_) => {
@@ -514,16 +606,6 @@ impl InputMapper {
         }
 
         Ok(())
-    }
-
-    fn cancel_pending_tap(&mut self) {
-        self.tapping.take();
-    }
-
-    fn prune_suppressed_keys(&mut self) {
-        // Keep only keys that are still physically held down
-        self.suppressed_until_released
-            .retain(|k| self.input_state.contains_key(k));
     }
 
     fn emit_keys(
@@ -553,10 +635,10 @@ impl InputMapper {
             let event_type = KeyEventType::from_value(event.value);
             match event_type {
                 KeyEventType::Press | KeyEventType::Repeat => {
-                    self.output_keys.insert(*key);
+                    self.state.output_keys.insert(*key);
                 },
                 KeyEventType::Release => {
-                    self.output_keys.remove(key);
+                    self.state.output_keys.remove(key);
                 },
                 _ => {},
             }
@@ -579,7 +661,8 @@ fn make_event(key: KeyCode, time: &TimeVal, event_type: KeyEventType) -> InputEv
     InputEvent::new(time, &EventCode::EV_KEY(key), event_type.value())
 }
 
-fn is_modifier(key: &KeyCode) -> bool {
+#[inline(always)]
+fn is_modifier(key: KeyCode) -> bool {
     matches!(
         key,
         KeyCode::KEY_FN
@@ -594,24 +677,166 @@ fn is_modifier(key: &KeyCode) -> bool {
     )
 }
 
-/// Orders modifier keys ahead of non-modifier keys.
-/// Unfortunately the underlying type doesn't allow direct
-/// comparison, but that's ok for our purposes.
-fn modifiers_first(a: &KeyCode, b: &KeyCode) -> Ordering {
-    if is_modifier(a) {
-        if is_modifier(b) { Ordering::Equal } else { Ordering::Less }
-    } else if is_modifier(b) {
-        Ordering::Greater
-    } else {
-        // Neither are modifiers
-        Ordering::Equal
+#[cfg(test)]
+mod tests {
+    extern crate test;
+    use super::*;
+    use evdev_rs::enums::EV_KEY::*;
+    use std::collections::HashSet;
+
+    // TODO: load from config file!
+    // its getting too messy
+    #[test]
+    fn basic_remap() {
+        let mappings = vec![Mapping::Remap {
+            input: [KEY_A].iter().cloned().collect(),
+            output: [KEY_X].iter().cloned().collect(),
+            mode: None,
+        }];
+        let mut s = RemapEngine::new(mappings);
+        s.input_state
+            .insert(KEY_A, TimeVal::new(0, 0));
+        s.active_remaps.push(ActiveRemap {
+            inputs: [KEY_A].iter().cloned().collect(),
+            outputs: [KEY_X].iter().cloned().collect(),
+            outputs_vec: vec![KEY_X],
+            kind: ActiveKind::Remap,
+            mode: None,
+        });
+
+        let keys = s.compute_keys();
+        let mut expected = HashSet::new();
+        expected.insert(KEY_X);
+
+        assert_eq!(keys, expected);
+    }
+
+    #[test]
+    fn test_remap_edge() {
+        let mappings = vec![
+            Mapping::Remap {
+                input: [KEY_LEFTALT, KEY_F]
+                    .iter()
+                    .cloned()
+                    .collect(),
+                output: [KEY_MINUS].iter().cloned().collect(),
+                mode: Some("default".to_string()),
+            },
+            Mapping::Remap {
+                input: [KEY_LEFTALT, KEY_LEFTBRACE]
+                    .iter()
+                    .cloned()
+                    .collect(),
+                output: [KEY_LEFTSHIFT, KEY_9]
+                    .iter()
+                    .cloned()
+                    .collect(),
+                mode: Some("default".to_string()),
+            },
+        ];
+
+        let mut s = RemapEngine::new(mappings);
+
+        s.input_state
+            .insert(KEY_LEFTALT, TimeVal::new(0, 0));
+
+        s.input_state
+            .insert(KEY_F, TimeVal::new(0, 1));
+        s.active_remaps.push(ActiveRemap {
+            inputs: [KEY_LEFTALT, KEY_F]
+                .iter()
+                .cloned()
+                .collect(),
+            outputs: [KEY_MINUS].iter().cloned().collect(),
+            outputs_vec: vec![KEY_MINUS],
+            kind: ActiveKind::Remap,
+            mode: Some("default".to_string()),
+        });
+
+        let keys_after_f = s.compute_keys();
+        let mut expected_after_f = HashSet::new();
+        expected_after_f.insert(KEY_MINUS);
+        println!("after_f out={:?} exp={:?}", keys_after_f, expected_after_f);
+        assert_eq!(keys_after_f, expected_after_f);
+
+        s.input_state
+            .insert(KEY_LEFTBRACE, TimeVal::new(0, 2));
+        s.active_remaps.push(ActiveRemap {
+            inputs: [KEY_LEFTALT, KEY_LEFTBRACE]
+                .iter()
+                .cloned()
+                .collect(),
+            outputs: [KEY_LEFTSHIFT, KEY_9]
+                .iter()
+                .cloned()
+                .collect(),
+            outputs_vec: vec![KEY_LEFTSHIFT, KEY_9],
+            kind: ActiveKind::Remap,
+            mode: Some("default".to_string()),
+        });
+
+        let keys_after_leftbrace = s.compute_keys();
+        let mut expected_after_leftbrace = HashSet::new();
+        expected_after_leftbrace.insert(KEY_MINUS);
+        expected_after_leftbrace.insert(KEY_LEFTSHIFT);
+        expected_after_leftbrace.insert(KEY_9);
+        assert_eq!(keys_after_leftbrace, expected_after_leftbrace);
+    }
+
+    #[test]
+    fn test_modifier() {
+        let mut keys: Vec<KeyCode> = vec![
+            KEY_A,
+            KEY_LEFTSHIFT,
+            KEY_B,
+            KEY_RIGHTCTRL,
+            KEY_C,
+            KEY_LEFTALT,
+        ];
+
+        keys.sort_by_key(|k| !is_modifier(*k));
+        assert!(
+            keys[0..3]
+                .iter()
+                .all(|k| is_modifier(*k))
+        );
+        assert!(
+            keys[3..6]
+                .iter()
+                .all(|k| !is_modifier(*k))
+        );
+
+        keys.sort_by_key(|k| is_modifier(*k));
+        assert!(
+            keys[0..3]
+                .iter()
+                .all(|k| !is_modifier(*k))
+        );
+        assert!(
+            keys[3..6]
+                .iter()
+                .all(|k| is_modifier(*k))
+        );
+    }
+
+    #[bench]
+    fn bench_modifier_sorting(b: &mut test::Bencher) {
+        let keys: Vec<KeyCode> = (0..100)
+            .map(|i| {
+                if i % 5 == 0 {
+                    KEY_LEFTSHIFT
+                } else if i % 3 == 0 {
+                    KEY_RIGHTCTRL
+                } else {
+                    evdev_rs::enums::int_to_ev_key(i).unwrap_or(KEY_A)
+                }
+            })
+            .collect();
+
+        b.iter(|| {
+            let mut work_keys = keys.clone();
+            work_keys.sort_by_key(|k| !is_modifier(*k));
+            test::black_box(work_keys);
+        });
     }
 }
-
-fn modifiers_last(a: &KeyCode, b: &KeyCode) -> Ordering {
-    modifiers_first(a, b).reverse()
-}
-
-// fn mode_default() -> Mode {
-//     Mode::Normal
-// }

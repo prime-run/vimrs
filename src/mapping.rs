@@ -30,33 +30,49 @@ impl MappingConfig {
             mappings.push(ms.into());
         }
 
-        // Nested modes: scope rules under each named mode
         for (mode_name, section) in config_file.modes {
-            // Dual roles scoped to this mode
             for dual in section.dual_role {
                 let map = Mapping::DualRole {
                     input: dual.input.into(),
-                    hold: dual.hold.into_iter().map(Into::into).collect(),
-                    tap: dual.tap.into_iter().map(Into::into).collect(),
+                    hold: dual
+                        .hold
+                        .into_iter()
+                        .map(Into::into)
+                        .collect(),
+                    tap: dual
+                        .tap
+                        .into_iter()
+                        .map(Into::into)
+                        .collect(),
                     mode: Some(mode_name.clone()),
                 };
                 mappings.push(map);
             }
 
-            // Remaps scoped to this mode
             for remap in section.remap {
                 let map = Mapping::Remap {
-                    input: remap.input.into_iter().map(Into::into).collect(),
-                    output: remap.output.into_iter().map(Into::into).collect(),
+                    input: remap
+                        .input
+                        .into_iter()
+                        .map(Into::into)
+                        .collect(),
+                    output: remap
+                        .output
+                        .into_iter()
+                        .map(Into::into)
+                        .collect(),
                     mode: Some(mode_name.clone()),
                 };
                 mappings.push(map);
             }
 
-            // Switch chords defined under this mode; active only while in this mode
             for ms in section.switch_to {
                 let map = Mapping::ModeSwitch {
-                    input: ms.input.into_iter().map(Into::into).collect(),
+                    input: ms
+                        .input
+                        .into_iter()
+                        .map(Into::into)
+                        .collect(),
                     mode: ms.mode,
                     scope: Some(mode_name.clone()),
                 };
@@ -81,21 +97,20 @@ pub enum Mapping {
         input: KeyCode,
         hold: Vec<KeyCode>,
         tap: Vec<KeyCode>,
-        /// Optional mode scope; if present, this dual role only applies in this mode.
         mode: Option<String>,
         // mode: Mode,
     },
     Remap {
         input: HashSet<KeyCode>,
         output: HashSet<KeyCode>,
-        /// optional mode name; if present, this remap only applies when the
-        /// global active mode matches this value.
         mode: Option<String>,
         // mode: Mode,
     },
-    /// switch the global active mode when this chord is pressed.
-    /// `mode` is the target mode. `scope` optionally constrains where this switch is active.
-    ModeSwitch { input: HashSet<KeyCode>, mode: String, scope: Option<String> },
+    ModeSwitch {
+        input: HashSet<KeyCode>,
+        mode: String,
+        scope: Option<String>,
+    },
 }
 
 #[derive(Debug, Deserialize)]

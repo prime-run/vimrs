@@ -1,6 +1,5 @@
 use anyhow::{Context, Result, bail};
 use evdev_rs::{Device, DeviceWrapper};
-use std::cmp::Ordering;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
@@ -89,11 +88,10 @@ impl DeviceInfo {
 
         // Order by name, but when multiple devices have the same name,
         // order by the event device unit number
-        devices.sort_by(|a, b| match a.name.cmp(&b.name) {
-            Ordering::Equal => {
-                event_number_from_path(&a.path).cmp(&event_number_from_path(&b.path))
-            },
-            different => different,
+        devices.sort_by(|a, b| {
+            a.name
+                .cmp(&b.name)
+                .then_with(|| event_number_from_path(&a.path).cmp(&event_number_from_path(&b.path)))
         });
         Ok(devices)
     }
