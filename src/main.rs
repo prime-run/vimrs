@@ -1,3 +1,5 @@
+#![feature(test)]
+
 use crate::deviceinfo::DeviceInfo;
 use crate::mapping::*;
 use crate::remapper::*;
