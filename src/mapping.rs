@@ -36,8 +36,16 @@ impl MappingConfig {
             for dual in section.dual_role {
                 let map = Mapping::DualRole {
                     input: dual.input.into(),
-                    hold: dual.hold.into_iter().map(Into::into).collect(),
-                    tap: dual.tap.into_iter().map(Into::into).collect(),
+                    hold: dual
+                        .hold
+                        .into_iter()
+                        .map(Into::into)
+                        .collect(),
+                    tap: dual
+                        .tap
+                        .into_iter()
+                        .map(Into::into)
+                        .collect(),
                     mode: Some(mode_name.clone()),
                 };
                 mappings.push(map);
@@ -46,8 +54,16 @@ impl MappingConfig {
             // Remaps scoped to this mode
             for remap in section.remap {
                 let map = Mapping::Remap {
-                    input: remap.input.into_iter().map(Into::into).collect(),
-                    output: remap.output.into_iter().map(Into::into).collect(),
+                    input: remap
+                        .input
+                        .into_iter()
+                        .map(Into::into)
+                        .collect(),
+                    output: remap
+                        .output
+                        .into_iter()
+                        .map(Into::into)
+                        .collect(),
                     mode: Some(mode_name.clone()),
                 };
                 mappings.push(map);
@@ -56,7 +72,11 @@ impl MappingConfig {
             // Switch chords defined under this mode; active only while in this mode
             for ms in section.switch_to {
                 let map = Mapping::ModeSwitch {
-                    input: ms.input.into_iter().map(Into::into).collect(),
+                    input: ms
+                        .input
+                        .into_iter()
+                        .map(Into::into)
+                        .collect(),
                     mode: ms.mode,
                     scope: Some(mode_name.clone()),
                 };

@@ -189,24 +189,8 @@ impl InputMapper {
         }
 
         let mut keys_minus_remapped = keys.clone();
-
-        for map in &self.mappings {
-            if let Mapping::ModeSwitch { input, scope, .. } = map {
-                let scope_ok = match (scope.as_ref(), self.active_mode.as_ref()) {
-                    (None, _) => true,
-                    (Some(_s), None) => false,
-                    (Some(s), Some(active)) => s == active,
-                };
-                if scope_ok && input.is_subset(&keys_minus_remapped) {
-                    for i in input {
-                        keys.remove(i);
-                        if !is_modifier(i) {
-                            keys_minus_remapped.remove(i);
-                        }
-                    }
-                }
-            }
-        }
+        // ModeSwitch base keys are suppressed on press via `suppressed_until_released` in
+        // `update_with_event()`, so we don't need to scan all mappings here.
 
         // Second pass to apply Remap items
         for map in &self.mappings {
@@ -293,21 +277,20 @@ impl InputMapper {
     }
 
     fn lookup_mapping(&self, code: KeyCode) -> Option<Mapping> {
-        let mut candidates = vec![];
+        // Track the best candidate on the fly to avoid allocation + sort.
+        let mut best_map: Option<&Mapping> = None;
+        let mut best_len: usize = 0;
+        let mut best_pri: u8 = 0; // Remap=0, ModeSwitch=1 (wins on tie)
 
         for map in &self.mappings {
             match map {
                 Mapping::DualRole { input, .. } => {
                     if *input == code {
-                        // A DualRole mapping has the highest precedence
-                        // so we've found our match
+                        // DualRole has highest precedence; return immediately.
                         return Some(map.clone());
                     }
                 },
                 Mapping::Remap { input, mode, .. } => {
-                    // Look for a mapping that includes the current key.
-                    // If part of a chord, all of its component keys must
-                    // also be pressed.
                     let mut code_matched = false;
                     let mut all_matched = true;
                     for i in input {
@@ -324,11 +307,19 @@ impl InputMapper {
                         (Some(m), Some(active)) => m == active,
                     };
                     if code_matched && all_matched && mode_ok {
-                        candidates.push(map);
+                        let cand_len = input.len();
+                        let cand_pri = 0u8;
+                        if best_map.is_none()
+                            || cand_len > best_len
+                            || (cand_len == best_len && cand_pri > best_pri)
+                        {
+                            best_map = Some(map);
+                            best_len = cand_len;
+                            best_pri = cand_pri;
+                        }
                     }
                 },
                 Mapping::ModeSwitch { input, scope, .. } => {
-                    // Include mode switch candidates as well
                     let mut code_matched = false;
                     let mut all_matched = true;
                     for i in input {
@@ -345,31 +336,22 @@ impl InputMapper {
                         (Some(s), Some(active)) => s == active,
                     };
                     if scope_ok && code_matched && all_matched {
-                        candidates.push(map);
+                        let cand_len = input.len();
+                        let cand_pri = 1u8; // ModeSwitch wins ties
+                        if best_map.is_none()
+                            || cand_len > best_len
+                            || (cand_len == best_len && cand_pri > best_pri)
+                        {
+                            best_map = Some(map);
+                            best_len = cand_len;
+                            best_pri = cand_pri;
+                        }
                     }
                 },
             }
         }
 
-        // Sort by most specific (largest input set), and prefer ModeSwitch over Remap on ties
-        candidates.sort_by(|a, b| {
-            let (len_a, pri_a) = match a {
-                Mapping::Remap { input, .. } => (input.len(), 0u8),
-                Mapping::ModeSwitch { input, .. } => (input.len(), 1u8),
-                _ => (0usize, 0u8),
-            };
-            let (len_b, pri_b) = match b {
-                Mapping::Remap { input, .. } => (input.len(), 0u8),
-                Mapping::ModeSwitch { input, .. } => (input.len(), 1u8),
-                _ => (0usize, 0u8),
-            };
-            // Descending by length, then descending by priority
-            len_b
-                .cmp(&len_a)
-                .then(pri_b.cmp(&pri_a))
-        });
-
-        candidates.first().map(|&m| m.clone())
+        best_map.cloned()
     }
 
     pub fn update_with_event(&mut self, event: &InputEvent, code: KeyCode) -> Result<()> {
@@ -453,7 +435,8 @@ impl InputMapper {
                     Some(Mapping::ModeSwitch { input, mode, .. }) => {
                         // Consume base keys for this switch so they don't leak through
                         for k in input.iter() {
-                            self.suppressed_until_released.insert(*k);
+                            self.suppressed_until_released
+                                .insert(*k);
                         }
 
                         // Persistently switch active mode
