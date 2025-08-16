@@ -1,166 +1,121 @@
 # Extending Evremap
 
-This guide outlines where and how to add features or evolve the design.
+This guide explains how to extend the codebase for new mapping behaviors, mode logic,
+or developer tooling. It references current structures and algorithms in `src/mapping.rs`
+and `src/remapper.rs`.
 
-## Add a new mapping type
+## Adding a new Mapping kind
 
-- Files to touch:
-  - `src/mapping.rs` — model + config parsing
-  - `src/remapper.rs` — application logic
-- Steps:
-  1. Extend `Mapping` enum with a new variant.
-  2. Add a corresponding `*Config` struct with `#[derive(Deserialize)]` and fields.
-  3. Update `ConfigFile` with a `#[serde(default)]` list for the new table (e.g., `[[new_mapping]]`).
-  4. Convert parsed config into `Mapping` in `MappingConfig::from_file` (preserve intended order).
-  5. Update `InputMapper` to interpret the new variant in:
-     - `compute_keys()` if it affects effective pressed keys
-     - `lookup_mapping()` and/or `update_with_event()` if it needs special matching/behavior
-     - `Repeat` handling if applicable
+1. __Update the model__ in `src/mapping.rs`:
+   - Add a new variant to `Mapping`:
+     ```rust
+     pub enum Mapping {
+         DualRole { /* ... */ },
+         Remap { /* ... */ },
+         ModeSwitch { /* ... */ },
+         // New variant
+         NewKind { /* fields */ },
+     }
+     ```
+   - Extend config structs and `serde` mappings to parse TOML into your new variant. If it can appear
+     in `[modes.<name>]`, ensure you lift `mode=Some(name)`/`scope=Some(name)` consistently.
+   - Update `MappingConfig::from_file()` layering to push your new variant in the correct order
+     relative to other entries.
 
-## Add “modes” support
+2. __Extend engine logic__ in `src/remapper.rs`:
+   - Consider whether your variant participates in:
+     - `lookup_dual_role_index(code)` — usually no unless it’s a new dual-role-like.
+     - `lookup_mapping_index(code)` — decide tie-breaking vs. `Remap` and `ModeSwitch`.
+       If it’s a chordal mapping, define how to compare chord sizes and whether it beats ModeSwitch on ties.
+     - `compute_keys()` — if it transforms the effective key set (remove inputs, add outputs), add logic
+       analogous to DualRole/Remap with `active_mode` gating.
+     - `emit_repeat_for_active_remap()` — if it should repeat, implement repeat behavior.
+   - Add a new `ActiveKind::NewKind` and propagate `active_remaps` bookkeeping.
+   - Determine suppression semantics: when your mapping ends, which still-held physical inputs should be
+     added to `suppressed_until_released` to avoid leakage?
 
-- Current hints: commented `Mode` enum in `src/mapping.rs` and commented `mode` fields in structs.
-- Approach:
-  - Reintroduce `Mode` in `Mapping` and config structs.
-  - Track current mode in `InputMapper` state.
-  - Add transitions via dedicated mappings (e.g., a chord that switches mode) or via a new mapping variant.
-  - Gate `lookup_mapping()` and `compute_keys()` on current mode.
+3. __Output capabilities__ in `InputMapper::create_mapper()`:
+   - Add any new output keys your mapping may emit to the uinput enablement set so the virtual device can
+     synthesize them. Currently, outputs are collected from `DualRole.tap`, `DualRole.hold`, and `Remap.output`.
 
-## Make tap/hold timing configurable
+4. __TOML configuration__:
+   - Document the new section in `wiki/architecture.md` and examples for developers (not user tutorials).
+   - Ensure invalid keys surface `ConfigError` with helpful messages.
 
-- Location: `src/remapper.rs::timeval_diff()` and `update_with_event()` (200ms threshold).
-- Options:
-  - Add field to `MappingConfig` (global) or to `DualRole` entries (per-key) and carry it into `Mapping`.
-  - Thread the value to `InputMapper` and consult it in tap detection.
+## Modifying mode behavior
 
-## Improve device selection
+- `active_mode` is an `Option<String>`, initialized to `Some("default")`.
+- `ModeSwitch { scope }` eligibility requires `scope == active_mode` or `scope == None`.
+- When a switch engages, its inputs are added to `suppressed_until_released`.
 
-- Current behavior: match by `name` and optional `phys` (`src/deviceinfo.rs`).
-- Options:
-  - Match on `input_id()` (vendor/product), `uniq()`, or other attributes.
-  - Extend `DeviceInfo` and `ConfigFile` with new selectors and prefer the most specific.
+To alter behavior:
+- __Global vs scoped switches__: adjust the scope check in `lookup_mapping_index()`.
+- __Default mode__: change initialization in `RemapEngine::new()` and defaults in config parsing.
+- __Persistent vs momentary modes__: currently modes are momentary chords; to persist, you could introduce
+  a latch/toggle variant that sets `active_mode` until an explicit exit mapping clears it.
 
-## Support non-key events
+## Changing chord matching and priority
 
-- Currently: non-key events are passed through as-is (`run_mapper` branch for non-`EV_KEY`).
-- To remap pointers/relative axes:
-  - Define new mapping variants (e.g., for `EV_REL`, `EV_ABS`).
-  - Enable corresponding capabilities on the virtual device before `UInputDevice::create_from_device()`.
-  - Extend event processing to transform and emit those events.
+Chord matching is implemented in `lookup_mapping_index(code)`:
+- `DualRole` exact-match wins when `input == code` and mode matches.
+- Among `Remap` candidates whose `input` set is fully contained in the currently held physical keys,
+  the largest chord wins.
+- `ModeSwitch` beats `Remap` on chord-size ties.
 
-## Robust config validation
+Adjustments:
+- __Tie-breaking__: reorder checks or introduce explicit priority for your new kind.
+- __Partial-chord grace__: relax subset checks if you want near-miss matching (be careful with suppression).
+- __Per-mode priority__: add a numeric priority field in the config and sort candidates accordingly.
 
-- Add a validation pass in `MappingConfig::from_file()` (or separate function) to:
-  - Detect unknown keys (already covered by `ConfigError`).
-  - Warn about overshadowed remaps due to ordering.
-  - Warn on conflicting dual-role definitions for the same `input`.
+## Suppression strategy
 
-## Performance considerations
+Suppression prevents key leakage when chords break.
+- On release that ends a chord remap, any remaining still-held non-modifier inputs are added to
+  `suppressed_until_released` and ignored until physical release.
+- Suppression swallows press/repeat, but release removes from the set.
 
-- `compute_keys()` and set cloning are simple and readable; fine for keyboard rates.
-- If needed:
-  - Use bitsets for `KeyCode` instead of `HashSet`.
-  - Cache chord match results keyed by active modifier sets.
+To change strategy:
+- Modify where keys enter/exit `suppressed_until_released` in release/press paths.
+- Consider allowing modifiers to bypass suppression for specific mappings.
 
-## Update the CLI
+## Emission ordering and modifiers
 
-- Location: `src/main.rs::Opt` and `main()` match arms.
-- Steps:
-  - Add a new subcommand or flags to `Opt`.
-  - Implement handler function and wire it into the `match` in `main()`.
-  - Consider logging and error contexts (`anyhow::Context`).
+- Press modifiers first: `to_press.sort_by_key(|k| !is_modifier(*k))`.
+- Release modifiers last: `to_release.sort_by_key(|k| is_modifier(*k))`.
+- `is_modifier(KeyCode)` centralizes modifier membership.
 
-## Extend modifier handling
+If you add new modifier-like keys, extend `is_modifier()` accordingly.
 
-- Location: `is_modifier()`, `modifiers_first/last` in `src/remapper.rs`.
-- When introducing new modifier-like keys, update `is_modifier()` so ordering remains correct.
+## Repeats
 
-## Testing strategy (suggested)
+- Active remap repeats are handled by `emit_repeat_for_active_remap()`.
+- Fallback repeats consult `lookup_dual_role_index()` or `lookup_mapping_index()`.
+- Suppressed keys never repeat.
 
-- No dedicated test suite exists yet.
-- Options:
-  - Extract pure functions (e.g., `compute_keys`) into smaller units and test with synthetic `Mapping`/state.
-  - Abstract input/output behind traits to simulate event streams.
-  - Property-test remap invariants (e.g., modifiers pressed before non-modifiers on press; released last).
+To customize:
+- Add per-mapping repeat rate or behavior and thread timing info into repeat emission.
 
-## Logging and tracing
+## CLI and tooling
 
-- Use `log` macros consistently; `trace!` is used for event IN/OUT.
-- Consider adding span-based tracing behind a feature flag without breaking the current `env_logger` default.
+- Add subcommands in `src/main.rs` under `enum Command`. Wire args with `clap`.
+- Add device inspection or tracing commands by reusing `DeviceInfo` and the event loop with alternate sinks.
+- Respect logging conventions: `EVREMAP_LOG`, `EVREMAP_LOG_STYLE`.
 
-## Rustdoc-style snippets
+## Device discovery
 
-### Where to extend the model (`src/mapping.rs`)
+- `DeviceInfo::with_name(name, phys)` resolves devices, preferring `phys`.
+- To support custom selection (e.g., by vendor/product), extend `DeviceInfo` and scanner logic in `src/deviceinfo.rs`.
 
-```rust
-// Add a new variant and config conversion
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub enum Mapping {
-    DualRole { input: KeyCode, hold: Vec<KeyCode>, tap: Vec<KeyCode> },
-    Remap    { input: HashSet<KeyCode>, output: HashSet<KeyCode> },
-    // NewVariant { /* fields */ }, // <-- add here
-}
+## Testing and debugging
 
-impl MappingConfig {
-    pub fn from_file<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
-        // ...
-        for dual in config_file.dual_role { mappings.push(dual.into()); }
-        for remap in config_file.remap { mappings.push(remap.into()); }
-        // for new_item in config_file.new_variant { mappings.push(new_item.into()); }
-        Ok(Self { /* ... */ })
-    }
-}
-```
+- Use the `DebugEvents` subcommand to print raw events.
+- Unit-test config parsing by feeding TOML to `MappingConfig::from_file()` with temporary files.
+- For engine logic, add targeted tests that simulate sequences of press/release/repeat and assert the
+  emitted output events or the internal `output_keys` transitions.
 
-### Where to extend behavior (`src/remapper.rs`)
+## Style and invariants
 
-```rust
-impl crate::remapper::InputMapper {
-    /// Compute effective pressed keys (extend with new variant behavior)
-    fn compute_keys(&self) -> HashSet<KeyCode> {
-        let mut keys: HashSet<KeyCode> = self.input_state.keys().cloned().collect();
-
-        // First pass: DualRole
-        for map in &self.mappings {
-            if let Mapping::DualRole { input, hold, .. } = map {
-                if keys.contains(input) {
-                    keys.remove(input);
-                    for h in hold { keys.insert(*h); }
-                }
-            }
-            // if let Mapping::NewVariant { /* ... */ } = map { /* transform keys */ }
-        }
-
-        let mut keys_minus_remapped = keys.clone();
-        // Second pass: Remap
-        for map in &self.mappings {
-            if let Mapping::Remap { input, output } = map {
-                if input.is_subset(&keys_minus_remapped) {
-                    for i in input { keys.remove(i); if !is_modifier(i) { keys_minus_remapped.remove(i); } }
-                    for o in output { keys.insert(*o); if !is_modifier(o) { keys_minus_remapped.remove(o); } }
-                }
-            }
-            // else if let Mapping::NewVariant { /* ... */ } = map { /* apply */ }
-        }
-        keys
-    }
-}
-```
-
-```rust
-// Matching new variants when handling events (press/release/repeat)
-pub fn update_with_event(&mut self, event: &InputEvent, code: KeyCode) -> Result<()> {
-    match KeyEventType::from_value(event.value) {
-        KeyEventType::Press => {
-            self.input_state.insert(code, event.time);
-            match self.lookup_mapping(code) {
-                Some(_m) => { /* possibly match NewVariant */ self.compute_and_apply_keys(&event.time)?; }
-                None => { self.cancel_pending_tap(); self.compute_and_apply_keys(&event.time)?; }
-            }
-        }
-        KeyEventType::Repeat => { /* extend if NewVariant should repeat */ }
-        KeyEventType::Release => { /* extend if NewVariant needs special release */ }
-        _ => self.write_event_and_sync(event)?,
-    }
-    Ok(())
-}
+- Keep all imports at file tops; avoid mid-file `use` statements.
+- Maintain `mappings` as the single source of truth and keep `active_remaps` consistent with it.
+- Always gate mapping application by `active_mode`.
+- Batch writes between `SYN_REPORT`s and respect ordering around modifiers.
