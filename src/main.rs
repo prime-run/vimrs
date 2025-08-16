@@ -4,7 +4,7 @@ use crate::deviceinfo::DeviceInfo;
 use crate::mapping::*;
 use crate::remapper::*;
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{CommandFactory, Parser, Subcommand, ValueHint};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -15,10 +15,19 @@ mod remapper;
 #[derive(Debug, Parser)]
 #[command(
     name = "evremap",
-    about,
-    author = "Wez Furlong"
+    version,
+    about = "Remap Linux input (evdev) events via a simple TOML config"
 )]
-enum Opt {
+struct Cli {
+    #[command(subcommand)]
+    cmd: Option<Command>,
+
+    #[arg(value_name = "CONFIG-FILE", value_hint = ValueHint::FilePath)]
+    config_file: Option<PathBuf>,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
     ListDevices,
 
     ListKeys,
@@ -31,11 +40,19 @@ enum Opt {
         phys: Option<String>,
     },
 
+    #[command(
+        arg_required_else_help = true,
+        about = "Apply mappings from a TOML config to a device"
+    )]
     Remap {
-        #[arg(name = "CONFIG-FILE")]
+        #[arg(
+            value_name = "/path/to/config.toml",
+            value_hint = ValueHint::FilePath,
+            help = "Path to the remapping config (TOML). Required."
+        )]
         config_file: PathBuf,
 
-        #[arg(short, long, default_value = "2")]
+        #[arg(short, long, default_value_t = 2.0)]
         delay: f64,
 
         #[arg(long)]
@@ -123,46 +140,105 @@ fn debug_events(device: DeviceInfo) -> Result<()> {
     }
 }
 
+fn do_remap(
+    config_file: PathBuf,
+    delay: f64,
+    device_name: Option<String>,
+    phys: Option<String>,
+    wait_for_device: bool,
+) -> Result<()> {
+    let mut mapping_config = MappingConfig::from_file(&config_file)
+        .context(format!("loading MappingConfig from {}", config_file.display()))?;
+
+    if let Some(device) = device_name {
+        mapping_config.device_name = Some(device);
+    }
+    if let Some(phys) = phys {
+        mapping_config.phys = Some(phys);
+    }
+
+    let device_name = mapping_config
+        .device_name
+        .as_deref()
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "device_name is missing; specify it either in the config file or via the \
+                 --device-name command line option"
+            )
+        })?;
+
+    log::warn!("Short delay: release any keys now!");
+    std::thread::sleep(Duration::from_secs_f64(delay));
+
+    let device_info = get_device(device_name, mapping_config.phys.as_deref(), wait_for_device)?;
+
+    let mut mapper = InputMapper::create_mapper(device_info.path, mapping_config.mappings)?;
+    mapper.run_mapper()
+}
+
 fn main() -> Result<()> {
     setup_logger();
-    let opt = Opt::parse();
+    let cli = Cli::parse();
 
-    match opt {
-        Opt::ListDevices => deviceinfo::list_devices(),
-        Opt::ListKeys => list_keys(),
-        Opt::DebugEvents { device_name, phys } => {
+    match cli.cmd {
+        Some(Command::ListDevices) => deviceinfo::list_devices(),
+        Some(Command::ListKeys) => list_keys(),
+        Some(Command::DebugEvents { device_name, phys }) => {
             let device_info = get_device(&device_name, phys.as_deref(), false)?;
             debug_events(device_info)
         },
-        Opt::Remap { config_file, delay, device_name, phys, wait_for_device } => {
-            let mut mapping_config = MappingConfig::from_file(&config_file)
-                .context(format!("loading MappingConfig from {}", config_file.display()))?;
-
-            if let Some(device) = device_name {
-                mapping_config.device_name = Some(device);
-            }
-            if let Some(phys) = phys {
-                mapping_config.phys = Some(phys);
-            }
-
-            let device_name = mapping_config
-                .device_name
-                .as_deref()
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "device_name is missing; specify it either in the config file or via the \
-                         --device-name command line option"
-                    )
-                })?;
-
-            log::warn!("Short delay: release any keys now!");
-            std::thread::sleep(Duration::from_secs_f64(delay));
-
-            let device_info =
-                get_device(device_name, mapping_config.phys.as_deref(), wait_for_device)?;
-
-            let mut mapper = InputMapper::create_mapper(device_info.path, mapping_config.mappings)?;
-            mapper.run_mapper()
+        Some(Command::Remap { config_file, delay, device_name, phys, wait_for_device }) => {
+            do_remap(config_file, delay, device_name, phys, wait_for_device)
         },
+        None => {
+            if let Some(config_file) = cli.config_file {
+                do_remap(config_file, 2.0, None, None, false)
+            } else {
+                Cli::command().print_help()?;
+                println!();
+                Ok(())
+            }
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_default_cmd() {
+        let cli = Cli::try_parse_from(["evremap", "foo.toml"]).expect("parse ok");
+        assert!(cli.cmd.is_none());
+        assert_eq!(cli.config_file, Some(PathBuf::from("foo.toml")));
+    }
+
+    #[test]
+    fn parse_remap_cmd() {
+        let cli = Cli::try_parse_from([
+            "evremap",
+            "remap",
+            "foo.toml",
+            "--delay",
+            "1.5",
+            "--device-name",
+            "dev",
+            "--phys",
+            "p",
+            "--wait-for-device",
+        ])
+        .expect("parse ok");
+
+        let Some(Command::Remap { config_file, delay, device_name, phys, wait_for_device }) =
+            cli.cmd
+        else {
+            panic!("expected 'remap' subcommand");
+        };
+
+        assert_eq!(config_file, PathBuf::from("foo.toml"));
+        assert!((delay - 1.5).abs() < f64::EPSILON);
+        assert_eq!(device_name.as_deref(), Some("dev"));
+        assert_eq!(phys.as_deref(), Some("p"));
+        assert!(wait_for_device);
     }
 }
