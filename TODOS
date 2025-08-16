@@ -12,3 +12,8 @@
 
 - cons:
 	- dangerous since it's system wide! (might lose keys in bad configs)
+
+
+OPTS:
+- avoid candidate Vec + sort in lookup ?
+- currently, active remaps are applied in activation order, do we need file-order precedence ?!

@@ -101,21 +101,20 @@ pub enum Mapping {
         input: KeyCode,
         hold: Vec<KeyCode>,
         tap: Vec<KeyCode>,
-        /// Optional mode scope; if present, this dual role only applies in this mode.
         mode: Option<String>,
         // mode: Mode,
     },
     Remap {
         input: HashSet<KeyCode>,
         output: HashSet<KeyCode>,
-        /// optional mode name; if present, this remap only applies when the
-        /// global active mode matches this value.
         mode: Option<String>,
         // mode: Mode,
     },
-    /// switch the global active mode when this chord is pressed.
-    /// `mode` is the target mode. `scope` optionally constrains where this switch is active.
-    ModeSwitch { input: HashSet<KeyCode>, mode: String, scope: Option<String> },
+    ModeSwitch {
+        input: HashSet<KeyCode>,
+        mode: String,
+        scope: Option<String>,
+    },
 }
 
 #[derive(Debug, Deserialize)]
