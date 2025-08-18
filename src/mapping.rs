@@ -60,6 +60,60 @@ impl MappingConfig {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use evdev_rs::enums::EV_KEY::*;
+
+    #[test]
+    fn test_compile_sequence_phases_basic() {
+        let phases = vec![
+            SequencePhaseConfig {
+                hold: vec![KeyCodeWrapper { code: KEY_LEFTCTRL }],
+                tap: vec![KeyCodeWrapper { code: KEY_RIGHT }],
+            },
+            SequencePhaseConfig { hold: vec![], tap: vec![KeyCodeWrapper { code: KEY_LEFT }] },
+        ];
+        let ops = compile_sequence_phases(phases);
+        let expected = vec![
+            MacroOp::Press(KEY_LEFTCTRL),
+            MacroOp::Press(KEY_RIGHT),
+            MacroOp::Release(KEY_RIGHT),
+            MacroOp::Release(KEY_LEFTCTRL),
+            MacroOp::Press(KEY_LEFT),
+            MacroOp::Release(KEY_LEFT),
+        ];
+        assert_eq!(ops, expected);
+    }
+
+    #[test]
+    fn test_remapconfig_into_macro() {
+        let rc = RemapConfig {
+            input: vec![KeyCodeWrapper { code: KEY_A }],
+            output: vec![],
+            mode: None,
+            output_sequence: Some(vec![SequencePhaseConfig {
+                hold: vec![KeyCodeWrapper { code: KEY_LEFTCTRL }],
+                tap: vec![KeyCodeWrapper { code: KEY_C }],
+            }]),
+        };
+        let mapping: Mapping = rc.into();
+        match mapping {
+            Mapping::Macro { input, seq, mode } => {
+                assert!(input.contains(&KEY_A));
+                assert_eq!(mode, Some("default".to_string()));
+                assert_eq!(seq, vec![
+                    MacroOp::Press(KEY_LEFTCTRL),
+                    MacroOp::Press(KEY_C),
+                    MacroOp::Release(KEY_C),
+                    MacroOp::Release(KEY_LEFTCTRL),
+                ]);
+            },
+            _ => panic!("expected Mapping::Macro"),
+        }
+    }
+}
+
 // #[derive(Debug, Clone, Eq, PartialEq)]
 // pub enum Mode {
 //     Visual,
@@ -88,6 +142,18 @@ pub enum Mapping {
         mode: String,
         scope: Option<String>,
     },
+    // Precompiled macro sequence (press/release ops) emitted immediately on trigger
+    Macro {
+        input: HashSet<KeyCode>,
+        seq: Vec<MacroOp>,
+        mode: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum MacroOp {
+    Press(KeyCode),
+    Release(KeyCode),
 }
 
 fn exclusive_noops(mode: &str, allowed: &HashSet<KeyCode>, all_keys: &[KeyCode]) -> Vec<Mapping> {
@@ -213,32 +279,89 @@ impl From<DualRoleConfig> for Mapping {
 #[derive(Debug, Deserialize)]
 struct RemapConfig {
     input: Vec<KeyCodeWrapper>,
+    #[serde(default)]
     output: Vec<KeyCodeWrapper>,
     #[serde(default)]
     mode: Option<String>,
+    // Optional sequence-based output. If present, this remap compiles to a Macro.
+    #[serde(default)]
+    output_sequence: Option<Vec<SequencePhaseConfig>>,
 }
 
 impl From<RemapConfig> for Mapping {
     fn from(val: RemapConfig) -> Self {
-        Mapping::Remap {
-            input: val
-                .input
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-            output: val
-                .output
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-            // NOTE: If no mode is specified, treat it as the implicit "default" mode.
-            mode: Some(
-                val.mode
-                    .unwrap_or_else(|| "default".to_string()),
-            ),
-            // mode: Mode::Insert,
+        if let Some(phases) = val.output_sequence {
+            Mapping::Macro {
+                input: val
+                    .input
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+                seq: compile_sequence_phases(phases),
+                mode: Some(
+                    val.mode
+                        .unwrap_or_else(|| "default".to_string()),
+                ),
+            }
+        } else {
+            Mapping::Remap {
+                input: val
+                    .input
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+                output: val
+                    .output
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+                // NOTE: If no mode is specified, treat it as the implicit "default" mode.
+                mode: Some(
+                    val.mode
+                        .unwrap_or_else(|| "default".to_string()),
+                ),
+                // mode: Mode::Insert,
+            }
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct SequencePhaseConfig {
+    #[serde(default)]
+    hold: Vec<KeyCodeWrapper>,
+    #[serde(default)]
+    tap: Vec<KeyCodeWrapper>,
+}
+
+fn compile_sequence_phases(phases: Vec<SequencePhaseConfig>) -> Vec<MacroOp> {
+    let mut ops: Vec<MacroOp> = Vec::new();
+    for phase in phases {
+        // Press holds in specified order
+        let holds: Vec<KeyCode> = phase
+            .hold
+            .into_iter()
+            .map(Into::into)
+            .collect();
+        for k in &holds {
+            ops.push(MacroOp::Press(*k));
+        }
+        // Tap keys in order (press + release)
+        let taps: Vec<KeyCode> = phase
+            .tap
+            .into_iter()
+            .map(Into::into)
+            .collect();
+        for k in &taps {
+            ops.push(MacroOp::Press(*k));
+            ops.push(MacroOp::Release(*k));
+        }
+        // Release holds in reverse order at phase end
+        for k in holds.iter().rev() {
+            ops.push(MacroOp::Release(*k));
+        }
+    }
+    ops
 }
 
 #[derive(Debug, Deserialize)]
@@ -313,19 +436,31 @@ impl ModeSection {
         }
 
         for remap in self.remap {
-            out.push(Mapping::Remap {
-                input: remap
-                    .input
-                    .into_iter()
-                    .map(Into::into)
-                    .collect(),
-                output: remap
-                    .output
-                    .into_iter()
-                    .map(Into::into)
-                    .collect(),
-                mode: Some(mode.to_string()),
-            });
+            if let Some(phases) = remap.output_sequence {
+                out.push(Mapping::Macro {
+                    input: remap
+                        .input
+                        .into_iter()
+                        .map(Into::into)
+                        .collect(),
+                    seq: compile_sequence_phases(phases),
+                    mode: Some(mode.to_string()),
+                });
+            } else {
+                out.push(Mapping::Remap {
+                    input: remap
+                        .input
+                        .into_iter()
+                        .map(Into::into)
+                        .collect(),
+                    output: remap
+                        .output
+                        .into_iter()
+                        .map(Into::into)
+                        .collect(),
+                    mode: Some(mode.to_string()),
+                });
+            }
         }
 
         for ms in self.switch_to {

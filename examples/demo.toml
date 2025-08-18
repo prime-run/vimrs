@@ -1,0 +1,132 @@
+device_name = "Usb KeyBoard Usb KeyBoard"
+
+# Toggle into normalvim mode from default (insert)
+[[mode_switch]]
+input = ["KEY_LEFTALT", "KEY_V"]
+mode = "normalvim"
+
+[modes.normalvim]
+exclusive = false
+
+# Toggle back to default (insert) while in normalvim mode
+[[modes.normalvim.switch]]
+input = ["KEY_LEFTALT", "KEY_V"]
+mode = "default"
+
+# NormalVim: word motions
+[[modes.normalvim.remap]]
+input = ["KEY_W"]
+output_sequence = [{ hold = ["KEY_LEFTCTRL"], tap = ["KEY_RIGHT"] }]
+
+[[modes.normalvim.remap]]
+input = ["KEY_B"]
+output_sequence = [{ hold = ["KEY_LEFTCTRL"], tap = ["KEY_LEFT"] }]
+
+# NormalVim: Shift+D => hold Shift, tap End; release; then Esc
+[[modes.normalvim.remap]]
+input = ["KEY_LEFTSHIFT", "KEY_D"]
+output_sequence = [
+  { hold = [
+    "KEY_LEFTSHIFT",
+  ], tap = [
+    "KEY_END",
+  ] },
+  { tap = [
+    "KEY_BACKSPACE",
+  ] },
+]
+
+# Additional complex NormalVim mappings
+
+# Shift+Y => copy current line: Home, Shift+End, Ctrl+C
+[[modes.normalvim.remap]]
+input = ["KEY_LEFTSHIFT", "KEY_Y"]
+output_sequence = [
+  { tap = [
+    "KEY_HOME",
+  ] },
+  { hold = [
+    "KEY_LEFTSHIFT",
+  ], tap = [
+    "KEY_END",
+  ] },
+  { hold = [
+    "KEY_LEFTCTRL",
+  ], tap = [
+    "KEY_C",
+  ] },
+]
+
+# Shift+P => paste at end of line on a new line: End, Enter, Ctrl+V
+[[modes.normalvim.remap]]
+input = ["KEY_LEFTSHIFT", "KEY_P"]
+output_sequence = [
+  { tap = [
+    "KEY_END",
+  ] },
+  { tap = [
+    "KEY_ENTER",
+  ] },
+  { hold = [
+    "KEY_LEFTCTRL",
+  ], tap = [
+    "KEY_V",
+  ] },
+]
+
+# Shift+C => change to end of line: Shift+End, then Ctrl+X (cut)
+[[modes.normalvim.remap]]
+input = ["KEY_LEFTSHIFT", "KEY_C"]
+output_sequence = [
+  { hold = [
+    "KEY_LEFTSHIFT",
+  ], tap = [
+    "KEY_END",
+  ] },
+  { hold = [
+    "KEY_LEFTCTRL",
+  ], tap = [
+    "KEY_X",
+  ] },
+]
+
+# Shift+G => go to end of file: Ctrl+End
+[[modes.normalvim.remap]]
+input = ["KEY_LEFTSHIFT", "KEY_G"]
+output_sequence = [{ hold = ["KEY_LEFTCTRL"], tap = ["KEY_END"] }]
+
+# In 'altv' mode: E => hold Ctrl, tap Right; then two Left taps
+[[modes.altv.remap]]
+input = ["KEY_E"]
+output_sequence = [
+  { hold = [
+    "KEY_LEFTCTRL",
+  ], tap = [
+    "KEY_RIGHT",
+  ] },
+  { tap = [
+    "KEY_LEFT",
+    "KEY_LEFT",
+  ] },
+]
+
+# In 'altv' mode: Ctrl+A => tap Backspace, then press Shift+A+S
+# NOTE: Macros release holds at the end of a phase by design.
+[[modes.altv.remap]]
+input = ["KEY_LEFTCTRL", "KEY_A"]
+output_sequence = [
+  { tap = [
+    "KEY_BACKSPACE",
+  ] },
+  { hold = [
+    "KEY_LEFTSHIFT",
+    "KEY_A",
+    "KEY_S",
+  ] },
+]
+
+# ALTERNATIVE (choose instead of the macro above if you want sustained hold):
+# While Ctrl+A is held, keep Shift+A+S held (no backspace tap).
+# [[modes.altv.remap]]
+# input = ["KEY_LEFTCTRL", "KEY_A"]
+# output = ["KEY_LEFTSHIFT", "KEY_A", "KEY_S"]

@@ -17,3 +17,16 @@
 OPTS:
 - avoid candidate Vec + sort in lookup ?
 - currently, active remaps are applied in activation order, do we need file-order precedence ?!
+
+
+-* add a default map to either keill the service or at least switch to default mode (C-\ C-x) is a good candidte
+
+
+--------
+
+very important, the lookup_mapping_index() should stay linear at all cost!
+every feat relying on it should be implemented with workarounds.
+e.g. exclusive in modes doesnt add extra lookups, instead fills all not mapped keys with none!
+
+
+

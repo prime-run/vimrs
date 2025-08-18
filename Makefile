@@ -1,12 +1,22 @@
-.PHONY: all fmt check test
+.PHONY: all fmt check clippy test dev
 
 all: check
 
 test:
-	timeout 20s ./target/debug/evremap remap ./test.toml
+	cargo test
 
 check:
 	cargo check
 
 fmt:
-	cargo +nightly fmt
+	cargo fmt
+
+clippy:
+	cargo clippy --fix --allow-dirty
+
+dev: check
+	cargo build --out-dir ./bin -Z unstable-options
+
+clean:
+	cargo clean
+	rm -rf ./bin

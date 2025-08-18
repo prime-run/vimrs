@@ -191,6 +191,35 @@ impl RemapEngine {
                         }
                     }
                 },
+                Mapping::Macro { input, mode, .. } => {
+                    let mut code_matched = false;
+                    let mut all_matched = true;
+                    for i in input {
+                        if *i == code {
+                            code_matched = true;
+                        } else if !self.input_state.contains_key(i) {
+                            all_matched = false;
+                            break;
+                        }
+                    }
+                    let mode_ok = match (mode.as_ref(), self.active_mode.as_ref()) {
+                        (None, _) => true,
+                        (Some(_m), None) => false,
+                        (Some(m), Some(active)) => m == active,
+                    };
+                    if code_matched && all_matched && mode_ok {
+                        let cand_len = input.len();
+                        let cand_pri = 0u8;
+                        if best_idx.is_none()
+                            || cand_len > best_len
+                            || (cand_len == best_len && cand_pri > best_pri)
+                        {
+                            best_idx = Some(idx);
+                            best_len = cand_len;
+                            best_pri = cand_pri;
+                        }
+                    }
+                },
                 Mapping::ModeSwitch { input, scope, .. } => {
                     let mut code_matched = false;
                     let mut all_matched = true;
@@ -270,6 +299,20 @@ impl InputMapper {
                 Mapping::Remap { output, .. } => {
                     for o in output {
                         enable_key_code(&mut input, *o)?;
+                    }
+                },
+                Mapping::Macro { seq, .. } => {
+                    let mut to_enable: HashSet<KeyCode> = HashSet::new();
+                    for op in seq {
+                        match op {
+                            &crate::mapping::MacroOp::Press(k)
+                            | &crate::mapping::MacroOp::Release(k) => {
+                                to_enable.insert(k);
+                            },
+                        }
+                    }
+                    for k in to_enable {
+                        enable_key_code(&mut input, k)?;
                     }
                 },
                 Mapping::ModeSwitch { .. } => {},
@@ -560,6 +603,29 @@ impl InputMapper {
                             self.compute_and_apply_keys(&event.time)?;
                             self.state.cancel_pending_tap();
                         },
+                        Mapping::Macro { .. } => {
+                            // Suppress input chord and emit precompiled macro ops immediately
+                            let (inputs_vec, inputs_set, seq_ops) = {
+                                if let Mapping::Macro { input, seq, .. } = &self.state.mappings[idx]
+                                {
+                                    let s: HashSet<KeyCode> = input.clone();
+                                    let v: Vec<KeyCode> = s.iter().cloned().collect();
+                                    (v, s, seq.clone())
+                                } else {
+                                    unreachable!()
+                                }
+                            };
+
+                            for k in &inputs_vec {
+                                self.state
+                                    .suppressed_until_released
+                                    .insert(*k);
+                            }
+
+                            // Do not register an ActiveRemap: macro outputs are immediate.
+                            self.emit_macro(&seq_ops, &event.time)?;
+                            self.state.cancel_pending_tap();
+                        },
                     },
                     None => {
                         self.state.cancel_pending_tap();
@@ -579,6 +645,9 @@ impl InputMapper {
                                 },
                                 Mapping::Remap { output, .. } => {
                                     to_emit = Some(output.iter().cloned().collect());
+                                },
+                                Mapping::Macro { .. } => {
+                                    // Macros do not repeat
                                 },
                                 Mapping::ModeSwitch { .. } => {},
                             }
@@ -643,6 +712,23 @@ impl InputMapper {
                 _ => {},
             }
         }
+        Ok(())
+    }
+
+    fn emit_macro(&mut self, ops: &[crate::mapping::MacroOp], time: &TimeVal) -> Result<()> {
+        for op in ops {
+            match *op {
+                crate::mapping::MacroOp::Press(k) => {
+                    let event = make_event(k, time, KeyEventType::Press);
+                    self.write_event(&event)?;
+                },
+                crate::mapping::MacroOp::Release(k) => {
+                    let event = make_event(k, time, KeyEventType::Release);
+                    self.write_event(&event)?;
+                },
+            }
+        }
+        self.generate_sync_event(time)?;
         Ok(())
     }
 
@@ -851,7 +937,8 @@ mod tests {
         let mut s = RemapEngine::new(mappings);
         s.active_mode = Some("gaming".to_string());
 
-        s.input_state.insert(KEY_A, TimeVal::new(0, 0));
+        s.input_state
+            .insert(KEY_A, TimeVal::new(0, 0));
         s.active_remaps.push(ActiveRemap {
             inputs: [KEY_A].iter().cloned().collect(),
             outputs: [].iter().cloned().collect(),
