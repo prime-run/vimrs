@@ -1,13 +1,14 @@
-use evdev_rs::{InputEvent, TimeVal};
-use crate::mapping::{EventCode, KeyCode};
 use super::types::KeyEventType;
+use crate::mapping::{EventCode, KeyCode};
+use evdev_rs::{InputEvent, TimeVal};
 
 pub(crate) fn timeval_diff(newer: &TimeVal, older: &TimeVal) -> std::time::Duration {
     const MICROS_PER_SECOND: libc::time_t = 1_000_000;
     let secs = newer.tv_sec - older.tv_sec;
     let usecs = newer.tv_usec - older.tv_usec;
 
-    let (secs, usecs) = if usecs < 0 { (secs - 1, usecs + MICROS_PER_SECOND) } else { (secs, usecs) };
+    let (secs, usecs) =
+        if usecs < 0 { (secs - 1, usecs + MICROS_PER_SECOND) } else { (secs, usecs) };
 
     std::time::Duration::from_micros(((secs * MICROS_PER_SECOND) + usecs) as u64)
 }

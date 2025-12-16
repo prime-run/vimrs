@@ -32,7 +32,7 @@ impl DeviceInfo {
             {
                 Some(idx) => return Ok(devices.remove(idx)),
                 None => {
-                    bail!("Requested device `{}` with phys=`{}` was not found", name, phys);
+                    bail!("Requested device `{name}` with phys=`{phys}` was not found");
                 },
             }
         }
@@ -43,7 +43,7 @@ impl DeviceInfo {
             .collect();
 
         if devices_with_name.is_empty() {
-            bail!("No device found with name `{}`", name);
+            bail!("No device found with name `{name}`");
         }
 
         if devices_with_name.len() > 1 {

@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 mod deviceinfo;
+mod lua_config;
 mod mapping;
 mod remapper;
 
@@ -147,8 +148,18 @@ fn do_remap(
     phys: Option<String>,
     wait_for_device: bool,
 ) -> Result<()> {
-    let mut mapping_config = MappingConfig::from_file(&config_file)
-        .context(format!("loading MappingConfig from {}", config_file.display()))?;
+    let mut mapping_config = if config_file
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("lua"))
+        .unwrap_or(false)
+    {
+        lua_config::from_lua_file(&config_file)
+            .context(format!("loading Lua config from {}", config_file.display()))?
+    } else {
+        MappingConfig::from_file(&config_file)
+            .context(format!("loading MappingConfig from {}", config_file.display()))?
+    };
 
     if let Some(device) = device_name {
         mapping_config.device_name = Some(device);

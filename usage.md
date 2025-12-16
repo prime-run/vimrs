@@ -152,3 +152,49 @@ output_sequence = [
 - Unknown key names: run `evremap list-keys`.
 - Got “stuck” in a mode: press `LeftCtrl + Backslash` (built-in escape) or add your own global switch to `default`.
 - Macro didn’t land the cursor as expected: editors differ on word boundaries. Adjust number of arrow/word taps.
+
+## Lua configuration (optional)
+
+Evremap also supports authoring configs in Lua with a Neovim-like DSL. The binary auto-detects `.lua` files and uses the Lua loader.
+
+- Run a Lua config:
+  ```bash
+  primemap examples/vim.lua
+  # or
+  primemap remap examples/vim.lua --device-name "Your Keyboard"
+  ```
+
+- Basic DSL:
+  ```lua
+  local m = primemap.mode("default")
+  primemap.device("Your Keyboard", nil)
+  m.dual_role("KEY_CAPSLOCK", {"KEY_LEFTCTRL"}, {"KEY_ESC"})
+  m.remap("<M-h>", "KEY_LEFT")
+  m.remap_seq("<C-s>", "<Home><S-End><C-c>")
+  m.switch("<M-v>", "visual")
+  ```
+
+- Aliases:
+  - Bare letters map to EV_KEY automatically: `"x" -> KEY_X`.
+  - Uppercase implies Shift: `"X" -> KEY_LEFTSHIFT + KEY_X`.
+  - Modifiers inside `<>`: `C`=Ctrl, `S`=Shift, `M`=Alt, plus `Meta`/`Super`.
+  - Named tokens: `Esc`, `Home`, `End`, `Tab`, `Enter`, `Space`, `[`, `]`, `Left`, `Right`, `Up`, `Down`.
+
+- Sequences are concatenated tokens: `"<Home><S-End><C-c>"`.
+
+- Require other files relative to the config (Neovim-style):
+  ```lua
+  require("setup.maps")  -- loads ./setup/maps.lua or ./setup/maps/init.lua
+  ```
+
+- LSP support (completion and no "undefined global primemap"):
+  - Stub file: `examples/primemap.d.lua`.
+  - VS Code `.luarc.json` (or settings):
+    ```json
+    {
+      "workspace.library": ["./examples"],
+      "diagnostics.globals": ["primemap"],
+      "runtime.version": "Lua 5.4"
+    }
+    ```
+  - Neovim (lua-language-server): add `examples` to `workspace.library` and `primemap` to `diagnostics.globals`.

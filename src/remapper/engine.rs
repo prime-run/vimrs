@@ -28,7 +28,11 @@ impl RemapEngine {
     }
 
     pub(crate) fn compute_keys(&self) -> HashSet<KeyCode> {
-        let mut keys: HashSet<KeyCode> = self.input_state.keys().cloned().collect();
+        let mut keys: HashSet<KeyCode> = self
+            .input_state
+            .keys()
+            .cloned()
+            .collect();
         for s in &self.suppressed_until_released {
             keys.remove(s);
         }
@@ -199,7 +203,8 @@ impl RemapEngine {
     }
 
     pub(crate) fn prune_suppressed_keys(&mut self) {
-        self.suppressed_until_released.retain(|k| self.input_state.contains_key(k));
+        self.suppressed_until_released
+            .retain(|k| self.input_state.contains_key(k));
     }
 }
 
@@ -217,7 +222,8 @@ mod tests {
             mode: None,
         }];
         let mut s = RemapEngine::new(mappings);
-        s.input_state.insert(KEY_A, TimeVal::new(0, 0));
+        s.input_state
+            .insert(KEY_A, TimeVal::new(0, 0));
         s.active_remaps.push(ActiveRemap {
             inputs: [KEY_A].iter().cloned().collect(),
             outputs: [KEY_X].iter().cloned().collect(),
@@ -237,24 +243,38 @@ mod tests {
     fn test_remap_edge() {
         let mappings = vec![
             Mapping::Remap {
-                input: [KEY_LEFTALT, KEY_F].iter().cloned().collect(),
+                input: [KEY_LEFTALT, KEY_F]
+                    .iter()
+                    .cloned()
+                    .collect(),
                 output: [KEY_MINUS].iter().cloned().collect(),
                 mode: Some("default".to_string()),
             },
             Mapping::Remap {
-                input: [KEY_LEFTALT, KEY_LEFTBRACE].iter().cloned().collect(),
-                output: [KEY_LEFTSHIFT, KEY_9].iter().cloned().collect(),
+                input: [KEY_LEFTALT, KEY_LEFTBRACE]
+                    .iter()
+                    .cloned()
+                    .collect(),
+                output: [KEY_LEFTSHIFT, KEY_9]
+                    .iter()
+                    .cloned()
+                    .collect(),
                 mode: Some("default".to_string()),
             },
         ];
 
         let mut s = RemapEngine::new(mappings);
 
-        s.input_state.insert(KEY_LEFTALT, TimeVal::new(0, 0));
+        s.input_state
+            .insert(KEY_LEFTALT, TimeVal::new(0, 0));
 
-        s.input_state.insert(KEY_F, TimeVal::new(0, 1));
+        s.input_state
+            .insert(KEY_F, TimeVal::new(0, 1));
         s.active_remaps.push(ActiveRemap {
-            inputs: [KEY_LEFTALT, KEY_F].iter().cloned().collect(),
+            inputs: [KEY_LEFTALT, KEY_F]
+                .iter()
+                .cloned()
+                .collect(),
             outputs: [KEY_MINUS].iter().cloned().collect(),
             outputs_vec: vec![KEY_MINUS],
             kind: ActiveKind::Remap,
@@ -266,10 +286,17 @@ mod tests {
         expected_after_f.insert(KEY_MINUS);
         assert_eq!(keys_after_f, expected_after_f);
 
-        s.input_state.insert(KEY_LEFTBRACE, TimeVal::new(0, 2));
+        s.input_state
+            .insert(KEY_LEFTBRACE, TimeVal::new(0, 2));
         s.active_remaps.push(ActiveRemap {
-            inputs: [KEY_LEFTALT, KEY_LEFTBRACE].iter().cloned().collect(),
-            outputs: [KEY_LEFTSHIFT, KEY_9].iter().cloned().collect(),
+            inputs: [KEY_LEFTALT, KEY_LEFTBRACE]
+                .iter()
+                .cloned()
+                .collect(),
+            outputs: [KEY_LEFTSHIFT, KEY_9]
+                .iter()
+                .cloned()
+                .collect(),
             outputs_vec: vec![KEY_LEFTSHIFT, KEY_9],
             kind: ActiveKind::Remap,
             mode: Some("default".to_string()),
@@ -294,7 +321,8 @@ mod tests {
         let mut s = RemapEngine::new(mappings);
         s.active_mode = Some("gaming".to_string());
 
-        s.input_state.insert(KEY_A, TimeVal::new(0, 0));
+        s.input_state
+            .insert(KEY_A, TimeVal::new(0, 0));
         s.active_remaps.push(ActiveRemap {
             inputs: [KEY_A].iter().cloned().collect(),
             outputs: [].iter().cloned().collect(),
