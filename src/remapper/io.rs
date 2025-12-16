@@ -15,7 +15,9 @@ pub struct InputMapper {
 }
 
 fn enable_key_code(input: &mut Device, key: KeyCode) -> Result<()> {
-    input.enable(EventCode::EV_KEY(key)).context(format!("enable key {key:?}"))?;
+    input
+        .enable(EventCode::EV_KEY(key))
+        .context(format!("enable key {key:?}"))?;
     Ok(())
 }
 
@@ -26,7 +28,7 @@ impl InputMapper {
         let mut input = Device::new_from_file(f)
             .with_context(|| format!("failed to create new Device from file {}", path.display()))?;
 
-        input.set_name(&format!("evremap Virtual input for {}", path.display()));
+        input.set_name(&format!("primemap Virtual input for {}", path.display()));
 
         for map in &mappings {
             match map {
@@ -47,7 +49,8 @@ impl InputMapper {
                     let mut to_enable: HashSet<KeyCode> = HashSet::new();
                     for op in seq {
                         match op {
-                            &crate::mapping::MacroOp::Press(k) | &crate::mapping::MacroOp::Release(k) => {
+                            &crate::mapping::MacroOp::Press(k)
+                            | &crate::mapping::MacroOp::Release(k) => {
                                 to_enable.insert(k);
                             },
                         }
@@ -63,7 +66,9 @@ impl InputMapper {
         let output = UInputDevice::create_from_device(&input)
             .context(format!("creating UInputDevice from {}", path.display()))?;
 
-        input.grab(GrabMode::Grab).context(format!("grabbing exclusive access on {}", path.display()))?;
+        input
+            .grab(GrabMode::Grab)
+            .context(format!("grabbing exclusive access on {}", path.display()))?;
 
         Ok(Self { input, output, state: RemapEngine::new(mappings) })
     }
@@ -71,7 +76,9 @@ impl InputMapper {
     pub fn run_mapper(&mut self) -> Result<()> {
         log::info!("Going into read loop");
         loop {
-            let (status, event) = self.input.next_event(ReadFlag::NORMAL | ReadFlag::BLOCKING)?;
+            let (status, event) = self
+                .input
+                .next_event(ReadFlag::NORMAL | ReadFlag::BLOCKING)?;
             match status {
                 evdev_rs::ReadStatus::Success => {
                     if let EventCode::EV_KEY(ref key) = event.event_code {
@@ -89,8 +96,16 @@ impl InputMapper {
 
     fn compute_and_apply_keys(&mut self, time: &TimeVal) -> Result<()> {
         let desired_keys = self.state.compute_keys();
-        let mut to_release: Vec<KeyCode> = self.state.output_keys.difference(&desired_keys).cloned().collect();
-        let mut to_press: Vec<KeyCode> = desired_keys.difference(&self.state.output_keys).cloned().collect();
+        let mut to_release: Vec<KeyCode> = self
+            .state
+            .output_keys
+            .difference(&desired_keys)
+            .cloned()
+            .collect();
+        let mut to_press: Vec<KeyCode> = desired_keys
+            .difference(&self.state.output_keys)
+            .cloned()
+            .collect();
 
         if !to_release.is_empty() {
             to_release.sort_by_key(|k| is_modifier(*k));
@@ -107,7 +122,12 @@ impl InputMapper {
         let mut dual_idx: Option<usize> = None;
         let mut best_remap_idx: Option<usize> = None;
         let mut best_len: usize = 0;
-        for (idx, ar) in self.state.active_remaps.iter().enumerate() {
+        for (idx, ar) in self
+            .state
+            .active_remaps
+            .iter()
+            .enumerate()
+        {
             if matches!(ar.kind, ActiveKind::ModeSwitch) {
                 continue;
             }
@@ -134,7 +154,9 @@ impl InputMapper {
             }
         }
         if let Some(idx) = dual_idx.or(best_remap_idx) {
-            let len = self.state.active_remaps[idx].outputs_vec.len();
+            let len = self.state.active_remaps[idx]
+                .outputs_vec
+                .len();
             for i in 0..len {
                 let k = self.state.active_remaps[idx].outputs_vec[i];
                 let event = make_event(k, time, KeyEventType::Repeat);
@@ -167,11 +189,18 @@ impl InputMapper {
                     }
                 }
                 if !ended_inputs.is_empty() {
-                    self.state.active_remaps.retain(|ar| !ar.inputs.contains(&code));
+                    self.state
+                        .active_remaps
+                        .retain(|ar| !ar.inputs.contains(&code));
                     for inputs in ended_inputs {
                         for k in inputs {
-                            if k != code && self.state.input_state.contains_key(&k) && !is_modifier(k) {
-                                self.state.suppressed_until_released.insert(k);
+                            if k != code
+                                && self.state.input_state.contains_key(&k)
+                                && !is_modifier(k)
+                            {
+                                self.state
+                                    .suppressed_until_released
+                                    .insert(k);
                             }
                         }
                     }
@@ -180,13 +209,16 @@ impl InputMapper {
                 self.compute_and_apply_keys(&event.time)?;
 
                 let mut tap_keys: Option<Vec<KeyCode>> = None;
-                if let Some(idx) = self.state.lookup_dual_role_index(code) && let Mapping::DualRole { tap, .. } = &self.state.mappings[idx] {
+                if let Some(idx) = self.state.lookup_dual_role_index(code)
+                    && let Mapping::DualRole { tap, .. } = &self.state.mappings[idx]
+                {
                     tap_keys = Some(tap.clone());
                 }
                 if let Some(tap_vec) = tap_keys
                     && let Some(tapping) = self.state.tapping.take()
                     && tapping == code
-                    && timeval_diff(&event.time, &pressed_at) <= std::time::Duration::from_millis(200)
+                    && timeval_diff(&event.time, &pressed_at)
+                        <= std::time::Duration::from_millis(200)
                 {
                     self.emit_keys(&tap_vec, &event.time, KeyEventType::Press)?;
                     self.emit_keys(&tap_vec, &event.time, KeyEventType::Release)?;
@@ -194,30 +226,43 @@ impl InputMapper {
             },
 
             KeyEventType::Press => {
-                self.state.input_state.insert(code, event.time);
+                self.state
+                    .input_state
+                    .insert(code, event.time);
                 self.state.prune_suppressed_keys();
 
                 match self.state.lookup_mapping_index(code) {
                     Some(idx) => match &self.state.mappings[idx] {
                         Mapping::DualRole { .. } => {
                             let (inputs_set, outputs_set, outputs_vec, mode_clone) = {
-                                if let Mapping::DualRole { hold, mode, .. } = &self.state.mappings[idx] {
+                                if let Mapping::DualRole { hold, mode, .. } =
+                                    &self.state.mappings[idx]
+                                {
                                     let mut s: HashSet<KeyCode> = HashSet::new();
                                     s.insert(code);
                                     let vec = hold.clone();
                                     let set: HashSet<KeyCode> = hold.iter().cloned().collect();
                                     (s, set, vec, mode.clone())
-                                } else { unreachable!() }
+                                } else {
+                                    unreachable!()
+                                }
                             };
 
-                            if !self.state.active_remaps.iter().any(|ar| ar.inputs == inputs_set) {
-                                self.state.active_remaps.push(ActiveRemap {
-                                    inputs: inputs_set,
-                                    outputs: outputs_set,
-                                    outputs_vec,
-                                    kind: ActiveKind::DualRole,
-                                    mode: mode_clone,
-                                });
+                            if !self
+                                .state
+                                .active_remaps
+                                .iter()
+                                .any(|ar| ar.inputs == inputs_set)
+                            {
+                                self.state
+                                    .active_remaps
+                                    .push(ActiveRemap {
+                                        inputs: inputs_set,
+                                        outputs: outputs_set,
+                                        outputs_vec,
+                                        kind: ActiveKind::DualRole,
+                                        mode: mode_clone,
+                                    });
                             }
 
                             self.compute_and_apply_keys(&event.time)?;
@@ -225,46 +270,78 @@ impl InputMapper {
                         },
                         Mapping::Remap { .. } => {
                             let (input_set, output_set, output_vec, mode_clone) = {
-                                if let Mapping::Remap { input, output, mode, .. } = &self.state.mappings[idx] {
-                                    (input.clone(), output.clone(), output.iter().cloned().collect::<Vec<KeyCode>>(), mode.clone())
-                                } else { unreachable!() }
+                                if let Mapping::Remap { input, output, mode, .. } =
+                                    &self.state.mappings[idx]
+                                {
+                                    (
+                                        input.clone(),
+                                        output.clone(),
+                                        output
+                                            .iter()
+                                            .cloned()
+                                            .collect::<Vec<KeyCode>>(),
+                                        mode.clone(),
+                                    )
+                                } else {
+                                    unreachable!()
+                                }
                             };
 
-                            if !self.state.active_remaps.iter().any(|ar| ar.inputs == input_set) {
-                                self.state.active_remaps.push(ActiveRemap {
-                                    inputs: input_set,
-                                    outputs: output_set,
-                                    outputs_vec: output_vec,
-                                    kind: ActiveKind::Remap,
-                                    mode: mode_clone,
-                                });
+                            if !self
+                                .state
+                                .active_remaps
+                                .iter()
+                                .any(|ar| ar.inputs == input_set)
+                            {
+                                self.state
+                                    .active_remaps
+                                    .push(ActiveRemap {
+                                        inputs: input_set,
+                                        outputs: output_set,
+                                        outputs_vec: output_vec,
+                                        kind: ActiveKind::Remap,
+                                        mode: mode_clone,
+                                    });
                             }
                             self.compute_and_apply_keys(&event.time)?;
                             self.state.tapping.replace(code);
                         },
                         Mapping::ModeSwitch { .. } => {
                             let (inputs_vec, inputs_set, mode_new) = {
-                                if let Mapping::ModeSwitch { input, mode, .. } = &self.state.mappings[idx] {
+                                if let Mapping::ModeSwitch { input, mode, .. } =
+                                    &self.state.mappings[idx]
+                                {
                                     let s: HashSet<KeyCode> = input.clone();
                                     let v: Vec<KeyCode> = s.iter().cloned().collect();
                                     (v, s, mode.clone())
-                                } else { unreachable!() }
+                                } else {
+                                    unreachable!()
+                                }
                             };
 
                             for k in &inputs_vec {
-                                self.state.suppressed_until_released.insert(*k);
+                                self.state
+                                    .suppressed_until_released
+                                    .insert(*k);
                             }
 
                             self.state.active_mode = Some(mode_new);
 
-                            if !self.state.active_remaps.iter().any(|ar| ar.inputs == inputs_set) {
-                                self.state.active_remaps.push(ActiveRemap {
-                                    inputs: inputs_set,
-                                    outputs: HashSet::new(),
-                                    outputs_vec: Vec::new(),
-                                    kind: ActiveKind::ModeSwitch,
-                                    mode: None,
-                                });
+                            if !self
+                                .state
+                                .active_remaps
+                                .iter()
+                                .any(|ar| ar.inputs == inputs_set)
+                            {
+                                self.state
+                                    .active_remaps
+                                    .push(ActiveRemap {
+                                        inputs: inputs_set,
+                                        outputs: HashSet::new(),
+                                        outputs_vec: Vec::new(),
+                                        kind: ActiveKind::ModeSwitch,
+                                        mode: None,
+                                    });
                             }
 
                             self.compute_and_apply_keys(&event.time)?;
@@ -272,15 +349,20 @@ impl InputMapper {
                         },
                         Mapping::Macro { .. } => {
                             let (inputs_vec, inputs_set, seq_ops) = {
-                                if let Mapping::Macro { input, seq, .. } = &self.state.mappings[idx] {
+                                if let Mapping::Macro { input, seq, .. } = &self.state.mappings[idx]
+                                {
                                     let s: HashSet<KeyCode> = input.clone();
                                     let v: Vec<KeyCode> = s.iter().cloned().collect();
                                     (v, s, seq.clone())
-                                } else { unreachable!() }
+                                } else {
+                                    unreachable!()
+                                }
                             };
 
                             for k in &inputs_vec {
-                                self.state.suppressed_until_released.insert(*k);
+                                self.state
+                                    .suppressed_until_released
+                                    .insert(*k);
                             }
 
                             // Immediate macro; no ActiveRemap
@@ -301,8 +383,12 @@ impl InputMapper {
                         Some(idx) => {
                             let mut to_emit: Option<Vec<KeyCode>> = None;
                             match &self.state.mappings[idx] {
-                                Mapping::DualRole { hold, .. } => { to_emit = Some(hold.clone()); },
-                                Mapping::Remap { output, .. } => { to_emit = Some(output.iter().cloned().collect()); },
+                                Mapping::DualRole { hold, .. } => {
+                                    to_emit = Some(hold.clone());
+                                },
+                                Mapping::Remap { output, .. } => {
+                                    to_emit = Some(output.iter().cloned().collect());
+                                },
                                 Mapping::Macro { .. } => { /* no repeat */ },
                                 Mapping::ModeSwitch { .. } => {},
                             }
@@ -311,7 +397,11 @@ impl InputMapper {
                             }
                         },
                         None => {
-                            if self.state.suppressed_until_released.contains(&code) {
+                            if self
+                                .state
+                                .suppressed_until_released
+                                .contains(&code)
+                            {
                             } else {
                                 self.state.cancel_pending_tap();
                                 self.write_event_and_sync(event)?;
@@ -320,13 +410,20 @@ impl InputMapper {
                     }
                 }
             },
-            KeyEventType::Unknown(_) => { self.write_event_and_sync(event)?; },
+            KeyEventType::Unknown(_) => {
+                self.write_event_and_sync(event)?;
+            },
         }
 
         Ok(())
     }
 
-    fn emit_keys(&mut self, key: &[KeyCode], time: &TimeVal, event_type: KeyEventType) -> Result<()> {
+    fn emit_keys(
+        &mut self,
+        key: &[KeyCode],
+        time: &TimeVal,
+        event_type: KeyEventType,
+    ) -> Result<()> {
         for k in key {
             let event = make_event(*k, time, event_type);
             self.write_event(&event)?;
@@ -347,8 +444,12 @@ impl InputMapper {
         if let EventCode::EV_KEY(ref key) = event.event_code {
             let event_type = KeyEventType::from_value(event.value);
             match event_type {
-                KeyEventType::Press | KeyEventType::Repeat => { self.state.output_keys.insert(*key); },
-                KeyEventType::Release => { self.state.output_keys.remove(key); },
+                KeyEventType::Press | KeyEventType::Repeat => {
+                    self.state.output_keys.insert(*key);
+                },
+                KeyEventType::Release => {
+                    self.state.output_keys.remove(key);
+                },
                 _ => {},
             }
         }
@@ -373,11 +474,12 @@ impl InputMapper {
     }
 
     fn generate_sync_event(&self, time: &TimeVal) -> Result<()> {
-        self.output.write_event(&InputEvent::new(
-            time,
-            &EventCode::EV_SYN(evdev_rs::enums::EV_SYN::SYN_REPORT),
-            0,
-        ))?;
+        self.output
+            .write_event(&InputEvent::new(
+                time,
+                &EventCode::EV_SYN(evdev_rs::enums::EV_SYN::SYN_REPORT),
+                0,
+            ))?;
         Ok(())
     }
 }

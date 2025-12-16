@@ -1,5 +1,5 @@
 [package]
-name = "evremap"
+name = "primemap"
 version = "0.1.0"
 authors = ["Wez Furlong"]
 edition = "2024"

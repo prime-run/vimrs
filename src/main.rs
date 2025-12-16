@@ -14,7 +14,7 @@ mod remapper;
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "evremap",
+    name = "primemap",
     version,
     about = "Remap Linux input (evdev) events via a simple TOML config"
 )]
@@ -83,8 +83,8 @@ fn setup_logger() {
     let mut builder = env_logger::Builder::new();
     builder.filter_level(log::LevelFilter::Info);
     let env = env_logger::Env::new()
-        .filter("EVREMAP_LOG")
-        .write_style("EVREMAP_LOG_STYLE");
+        .filter("primemap_LOG")
+        .write_style("primemap_LOG_STYLE");
     builder.parse_env(env);
     builder.init();
 }
@@ -208,7 +208,7 @@ mod tests {
 
     #[test]
     fn parse_default_cmd() {
-        let cli = Cli::try_parse_from(["evremap", "foo.toml"]).expect("parse ok");
+        let cli = Cli::try_parse_from(["primemap", "foo.toml"]).expect("parse ok");
         assert!(cli.cmd.is_none());
         assert_eq!(cli.config_file, Some(PathBuf::from("foo.toml")));
     }
@@ -216,7 +216,7 @@ mod tests {
     #[test]
     fn parse_remap_cmd() {
         let cli = Cli::try_parse_from([
-            "evremap",
+            "primemap",
             "remap",
             "foo.toml",
             "--delay",

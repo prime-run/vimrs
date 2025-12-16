@@ -52,7 +52,7 @@ impl DeviceInfo {
                 log::warn!("{dev:?}");
             }
             log::warn!(
-                "evremap will use the first entry. If you want to use one of the others, add the \
+                "primemap will use the first entry. If you want to use one of the others, add the \
                  corresponding phys value to your configuration, for example, `phys = \"{}\"` for \
                  the second entry in the list.",
                 devices_with_name[1].phys
