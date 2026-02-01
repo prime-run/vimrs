@@ -3,7 +3,7 @@ use evdev_rs::enums::EV_KEY as KeyCode;
 use mlua::prelude::*;
 use mlua::{Error as LuaError, Value};
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::rc::Rc;
@@ -15,6 +15,7 @@ struct Builder {
     device_name: Option<String>,
     phys: Option<String>,
     mappings: Vec<Mapping>,
+    mode_exclusive: HashSet<String>,
 }
 
 fn expand_simple_token_to_keys(token: &str) -> Result<Vec<KeyCode>> {
@@ -286,6 +287,28 @@ pub fn from_lua_file<P: AsRef<Path>>(path: P) -> Result<MappingConfig> {
                 let mode_name = name.clone();
                 let table = lua.create_table()?;
 
+                // exclusive(flag: boolean)
+                // mark/unmark this mode as exclusive
+                {
+                    let builder = Rc::clone(&builder);
+                    let mode_name = mode_name.clone();
+                    let f = lua.create_function(move |_, flag: bool| -> LuaResult<()> {
+                        if flag {
+                            builder
+                                .borrow_mut()
+                                .mode_exclusive
+                                .insert(mode_name.clone());
+                        } else {
+                            builder
+                                .borrow_mut()
+                                .mode_exclusive
+                                .remove(&mode_name);
+                        }
+                        Ok(())
+                    })?;
+                    table.set("exclusive", f)?;
+                }
+
                 {
                     let builder = Rc::clone(&builder);
                     let mode_name = mode_name.clone();
@@ -458,10 +481,70 @@ pub fn from_lua_file<P: AsRef<Path>>(path: P) -> Result<MappingConfig> {
     let chunk = lua.load(&code).set_name(&name);
     lua_to_any(chunk.exec())?;
 
-    let b = builder.borrow();
-    Ok(MappingConfig {
-        device_name: b.device_name.clone(),
-        phys: b.phys.clone(),
-        mappings: b.mappings.clone(),
-    })
+    {
+        use evdev_rs::enums::EventCode;
+        let mut b = builder.borrow_mut();
+        if !b.mode_exclusive.is_empty() {
+            let mut allowed: HashMap<String, HashSet<KeyCode>> = HashMap::new();
+            for m in &b.mappings {
+                match m {
+                    Mapping::DualRole { input, mode, .. } => {
+                        if let Some(mode) = mode {
+                            allowed
+                                .entry(mode.clone())
+                                .or_default()
+                                .insert(*input);
+                        }
+                    },
+                    Mapping::Remap { input, mode, .. } => {
+                        if let Some(mode) = mode {
+                            let set = allowed.entry(mode.clone()).or_default();
+                            for i in input {
+                                set.insert(*i);
+                            }
+                        }
+                    },
+                    Mapping::Macro { input, mode, .. } => {
+                        if let Some(mode) = mode {
+                            let set = allowed.entry(mode.clone()).or_default();
+                            for i in input {
+                                set.insert(*i);
+                            }
+                        }
+                    },
+                    Mapping::ModeSwitch { input, scope, .. } => {
+                        if let Some(mode) = scope {
+                            let set = allowed.entry(mode.clone()).or_default();
+                            for i in input {
+                                set.insert(*i);
+                            }
+                        }
+                    },
+                }
+            }
+            let all_keys: Vec<KeyCode> = EventCode::EV_KEY(KeyCode::KEY_RESERVED)
+                .iter()
+                .filter_map(|ec| if let EventCode::EV_KEY(k) = ec { Some(k) } else { None })
+                .collect();
+            for mode in b.mode_exclusive.clone() {
+                let allow = allowed
+                    .entry(mode.clone())
+                    .or_default()
+                    .clone();
+                for k in &all_keys {
+                    if !allow.contains(k) {
+                        let input: HashSet<KeyCode> = std::iter::once(*k).collect();
+                        let output: HashSet<KeyCode> = HashSet::new();
+                        b.mappings
+                            .push(Mapping::Remap { input, output, mode: Some(mode.clone()) });
+                    }
+                }
+            }
+        }
+        Ok(MappingConfig {
+            device_name: b.device_name.clone(),
+            phys: b.phys.clone(),
+            mappings: b.mappings.clone(),
+        })
+    }
 }
